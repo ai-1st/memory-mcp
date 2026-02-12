@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS Lambda MCP Server Template
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: nodejs22.x
+    Architectures:
+      - arm64
+
+Resources:
+  McpServerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: src/
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - '*'
+          AllowMethods:
+            - GET
+            - POST
+          AllowHeaders:
+            - Content-Type
+            - Authorization
+          MaxAge: 300
+
+Outputs:
+  McpServerFunctionUrl:
+    Description: Lambda Function URL for MCP Server
+    Value: !GetAtt McpServerFunctionUrl.FunctionUrl
+  McpServerFunction:
+    Description: MCP Server Lambda Function ARN
+    Value: !GetAtt McpServerFunction.Arn
+

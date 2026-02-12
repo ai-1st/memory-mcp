@@ -1,0 +1,25 @@
+{
+  "name": "aws-lambda-nodejs-mcp",
+  "version": "1.0.0",
+  "description": "AWS Lambda MCP Server Template",
+  "main": "src/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "json-stable-stringify": "^1.0.1"
+  },
+  "keywords": [
+    "mcp",
+    "aws",
+    "lambda",
+    "serverless"
+  ],
+  "author": "",
+  "license": "ISC"
+}
+
