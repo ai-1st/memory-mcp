@@ -1,10 +1,18 @@
-import { getWeather } from './getWeather.js';
+import { addDoc } from './addDoc.js';
+import { listCategories } from './listCategories.js';
+import { listTopics } from './listTopics.js';
+import { semanticSearch } from './semanticSearch.js';
+import { getDocument } from './getDocument.js';
 
 /**
  * Registry of all available tools
  */
 export const tools = [
-  getWeather
+  addDoc,
+  listCategories,
+  listTopics,
+  semanticSearch,
+  getDocument,
 ];
 
 /**
@@ -13,9 +21,3 @@ export const tools = [
 export function getTool(name) {
   return tools.find(tool => tool.name === name);
 }
-
-
-
-
-
-

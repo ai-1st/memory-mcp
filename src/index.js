@@ -5,19 +5,8 @@ import { validateRequest, parseRequestBody, createErrorResponse } from './mcp/ut
  * Lambda handler for MCP server
  */
 export const handler = async (event) => {
-  // Handle CORS preflight
-  if (event.requestContext?.http?.method === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Max-Age': '300'
-      },
-      body: ''
-    };
-  }
+  // Note: CORS is handled by Lambda Function URL configuration in template.yaml
+  // No need to manually add CORS headers here
   
   // Parse request body
   let request;
@@ -28,8 +17,7 @@ export const handler = async (event) => {
     return {
       statusCode: 400,
       headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(createErrorResponse(
         null,
@@ -46,8 +34,7 @@ export const handler = async (event) => {
     return {
       statusCode: 400,
       headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(createErrorResponse(
         request.id || null,
@@ -66,8 +53,7 @@ export const handler = async (event) => {
     return {
       statusCode: 200,
       headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Content-Type': 'application/json'
       },
       body: ''
     };
@@ -77,8 +63,7 @@ export const handler = async (event) => {
   return {
     statusCode: 200,
     headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*'
+      'Content-Type': 'application/json'
     },
     body: JSON.stringify(response)
   };

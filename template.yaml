@@ -1,21 +1,69 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: AWS Lambda MCP Server Template
+Description: Memory MCP Server
 
 Globals:
   Function:
-    Timeout: 30
+    Timeout: 60
     MemorySize: 512
     Runtime: nodejs22.x
     Architectures:
       - arm64
 
 Resources:
+  MemoryMcpTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AWS::StackName}-table'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  VectorBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-vectors-${AWS::AccountId}'
+
   McpServerFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: index.handler
       CodeUri: src/
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MemoryMcpTable
+          VECTOR_BUCKET: !Ref VectorBucket
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MemoryMcpTable
+        - S3CrudPolicy:
+            BucketName: !Ref VectorBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: '*'
       FunctionUrlConfig:
         AuthType: NONE
         Cors:
@@ -30,10 +78,15 @@ Resources:
           MaxAge: 300
 
 Outputs:
-  McpServerFunctionUrl:
+  McpServerUrl:
     Description: Lambda Function URL for MCP Server
     Value: !GetAtt McpServerFunctionUrl.FunctionUrl
   McpServerFunction:
     Description: MCP Server Lambda Function ARN
     Value: !GetAtt McpServerFunction.Arn
-
+  TableName:
+    Description: DynamoDB Table Name
+    Value: !Ref MemoryMcpTable
+  VectorBucket:
+    Description: S3 Vector Bucket Name
+    Value: !Ref VectorBucket

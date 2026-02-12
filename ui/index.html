@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory MCP</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="logo">
+        <span class="logo-icon">&#9673;</span>
+        <span class="logo-text">Memory</span>
+      </div>
+      <nav>
+        <a href="#" data-view="categories" class="nav-item active">
+          <span class="nav-icon">&#9783;</span> Categories
+        </a>
+        <a href="#" data-view="search" class="nav-item">
+          <span class="nav-icon">&#8981;</span> Search
+        </a>
+        <a href="#" data-view="add" class="nav-item">
+          <span class="nav-icon">&#43;</span> Add Document
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="settings-btn" class="btn-ghost">
+          <span class="nav-icon">&#9881;</span> Endpoint
+        </button>
+        <div id="endpoint-form" class="endpoint-form hidden">
+          <input type="url" id="endpoint-input" placeholder="https://...lambda-url.../">
+          <button id="endpoint-save" class="btn-sm">Save</button>
+        </div>
+      </div>
+    </aside>
+
+    <main id="content">
+      <!-- Categories View -->
+      <section id="view-categories" class="view active">
+        <header class="view-header">
+          <h1>Categories</h1>
+        </header>
+        <div id="categories-list"></div>
+        <div id="categories-empty" class="empty-state hidden">
+          <p>No categories yet. Add a document to get started.</p>
+        </div>
+      </section>
+
+      <!-- Topics View -->
+      <section id="view-topics" class="view">
+        <header class="view-header">
+          <button id="topics-back" class="btn-ghost">&larr; Categories</button>
+          <h1 id="topics-title">Topics</h1>
+        </header>
+        <div id="topics-list" class="topic-list"></div>
+      </section>
+
+      <!-- Search View -->
+      <section id="view-search" class="view">
+        <header class="view-header">
+          <h1>Semantic Search</h1>
+        </header>
+        <div class="search-bar">
+          <input type="text" id="search-input" placeholder="Search topics by meaning..." autocomplete="off">
+          <button id="search-btn" class="btn-primary">Search</button>
+        </div>
+        <div id="search-results" class="topic-list"></div>
+        <div id="search-empty" class="empty-state">
+          <p>Enter a query to search across all topics.</p>
+        </div>
+      </section>
+
+      <!-- Add Document View -->
+      <section id="view-add" class="view">
+        <header class="view-header">
+          <h1>Add Document</h1>
+        </header>
+        <form id="add-form" class="add-form">
+          <label for="add-url">Source URL</label>
+          <input type="url" id="add-url" placeholder="https://example.com/article" required>
+          <label for="add-contents">Contents</label>
+          <textarea id="add-contents" placeholder="Paste document text here..." rows="12" required></textarea>
+          <button type="submit" class="btn-primary" id="add-submit">
+            <span class="btn-label">Extract Topics</span>
+            <span class="btn-loading hidden">Processing...</span>
+          </button>
+        </form>
+        <div id="add-result" class="add-result hidden"></div>
+      </section>
+
+      <!-- Document View -->
+      <section id="view-document" class="view">
+        <header class="view-header">
+          <button id="doc-back" class="btn-ghost">&larr; Back</button>
+          <h1>Document</h1>
+        </header>
+        <div id="doc-detail" class="doc-detail"></div>
+      </section>
+
+      <!-- Loading Overlay -->
+      <div id="loading" class="loading hidden">
+        <div class="spinner"></div>
+      </div>
+
+      <!-- Toast -->
+      <div id="toast" class="toast hidden"></div>
+    </main>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
