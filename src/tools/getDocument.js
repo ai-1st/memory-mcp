@@ -13,10 +13,21 @@ export const getDocument = {
     },
     required: ['id'],
   },
+  configSchema: {
+    type: 'object',
+    properties: {
+      projectId: {
+        type: 'string',
+        description: 'The project ID to scope this operation to',
+      },
+    },
+    required: ['projectId'],
+  },
 
-  async execute(args) {
+  async execute(args, config) {
     const { id } = args;
-    const doc = await getDoc(id);
+    const { projectId } = config;
+    const doc = await getDoc(projectId, id);
 
     if (!doc) {
       return {

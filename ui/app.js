@@ -1,7 +1,12 @@
 // ── MCP Client ──
 
 const STORAGE_KEY = 'memory-mcp-endpoint';
+const PROJECT_ID_KEY = 'memory-mcp-project-id';
+const PROJECT_NAME_KEY = 'memory-mcp-project-name';
+
 let endpoint = localStorage.getItem(STORAGE_KEY) || 'https://u5atpeuk5f4aabdba6bvcp4jfm0bpepd.lambda-url.us-east-1.on.aws/';
+let currentProjectId = localStorage.getItem(PROJECT_ID_KEY) || '';
+let currentProjectName = localStorage.getItem(PROJECT_NAME_KEY) || '';
 let rpcId = 0;
 
 async function rpc(method, params = {}) {
@@ -16,14 +21,23 @@ async function rpc(method, params = {}) {
   return json.result;
 }
 
-async function callTool(name, args = {}) {
-  const result = await rpc('tools/call', { name, arguments: args });
+async function callTool(name, args = {}, config = {}) {
+  const params = { name, arguments: args };
+  if (Object.keys(config).length > 0) {
+    params.config = config;
+  }
+  const result = await rpc('tools/call', params);
   if (result.isError) {
     const msg = result.content?.[0]?.text || 'Tool error';
     throw new Error(msg);
   }
   const text = result.content?.[0]?.text;
   return text ? JSON.parse(text) : result;
+}
+
+/** Helper: returns config with current projectId */
+function projectConfig() {
+  return { projectId: currentProjectId };
 }
 
 // ── State ──
@@ -41,6 +55,7 @@ const views = {
   search: $('#view-search'),
   add: $('#view-add'),
   document: $('#view-document'),
+  projects: $('#view-projects'),
 };
 
 // ── Navigation (History API) ──
@@ -65,17 +80,21 @@ function goBack() {
 }
 
 // Restore view on browser back/forward
-window.addEventListener('popstate', async (e) => {
-  const state = e.state || { view: 'categories' };
+window.addEventListener('popstate', (e) => {
+  const state = e.state;
+  if (!state) {
+    showView('categories', { push: false });
+    loadCategories();
+    return;
+  }
   showView(state.view, { push: false });
-
-  // Re-fetch data for data-driven views
-  if (state.view === 'categories') {
-    await loadCategories();
-  } else if (state.view === 'topics' && state.category) {
-    await loadTopics(state.category, false);
-  } else if (state.view === 'document' && state.docId) {
-    await loadDocument(state.docId, false);
+  switch (state.view) {
+    case 'categories': loadCategories(); break;
+    case 'topics': if (state.category) loadTopics(state.category, false); break;
+    case 'document': if (state.docId) loadDocument(state.docId, false); break;
+    case 'projects': loadProjectsList(); break;
+    case 'search': break; // keep existing results on screen
+    case 'add': break;
   }
 });
 
@@ -94,6 +113,120 @@ function toast(message, type = 'error') {
     el.classList.remove('visible');
     setTimeout(() => el.classList.add('hidden'), 300);
   }, 3500);
+}
+
+// ── Project Switcher ──
+
+function setProject(id, name) {
+  currentProjectId = id;
+  currentProjectName = name;
+  localStorage.setItem(PROJECT_ID_KEY, id);
+  localStorage.setItem(PROJECT_NAME_KEY, name);
+
+  // Update select if it exists
+  const sel = $('#project-select');
+  if (sel) sel.value = id;
+}
+
+async function loadProjects() {
+  try {
+    const data = await callTool('list_projects');
+    const projects = data.projects || [];
+    const sel = $('#project-select');
+
+    if (projects.length === 0) {
+      sel.innerHTML = '<option value="">No projects</option>';
+      currentProjectId = '';
+      currentProjectName = '';
+      localStorage.removeItem(PROJECT_ID_KEY);
+      localStorage.removeItem(PROJECT_NAME_KEY);
+      return projects;
+    }
+
+    sel.innerHTML = projects.map(p =>
+      `<option value="${esc(p.id)}">${esc(p.name)}</option>`
+    ).join('');
+
+    // Restore saved project or pick first
+    const saved = localStorage.getItem(PROJECT_ID_KEY);
+    const match = projects.find(p => p.id === saved);
+    if (match) {
+      setProject(match.id, match.name);
+    } else {
+      setProject(projects[0].id, projects[0].name);
+    }
+
+    return projects;
+  } catch (err) {
+    toast(err.message);
+    return [];
+  }
+}
+
+// ── Projects View ──
+
+async function loadProjectsList() {
+  setLoading(true);
+  try {
+    const data = await callTool('list_projects');
+    const projects = data.projects || [];
+    const list = $('#projects-list');
+    const empty = $('#projects-empty');
+
+    if (projects.length === 0) {
+      list.innerHTML = '';
+      empty.classList.remove('hidden');
+      return;
+    }
+
+    empty.classList.add('hidden');
+    list.innerHTML = projects.map(p => `
+      <div class="project-row${p.id === currentProjectId ? ' selected' : ''}" data-id="${esc(p.id)}" data-name="${esc(p.name)}">
+        <span class="project-row-name">${esc(p.name)}</span>
+        ${p.id === currentProjectId ? '<span class="project-row-active">Active</span>' : ''}
+        <span class="project-row-id">${esc(p.id.slice(0, 8))}...</span>
+        <span class="project-row-date">${p.createdAt ? new Date(p.createdAt).toLocaleDateString() : ''}</span>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.project-row').forEach(row => {
+      row.addEventListener('click', () => {
+        setProject(row.dataset.id, row.dataset.name);
+        toast(`Switched to "${row.dataset.name}"`, 'success');
+        loadProjectsList(); // re-render to show active state
+        loadCategories();
+      });
+    });
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function createProject() {
+  const input = $('#new-project-name');
+  const name = input.value.trim();
+  if (!name) return;
+
+  setLoading(true);
+  try {
+    const data = await callTool('create_project', { name });
+    input.value = '';
+
+    // Switch to the new project
+    setProject(data.id, data.name);
+
+    // Refresh the dropdown
+    await loadProjects();
+
+    toast(`Project "${name}" created`, 'success');
+    loadProjectsList();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    setLoading(false);
+  }
 }
 
 // ── Categories View ──
@@ -138,9 +271,10 @@ function renderTree(node, depth = 0) {
 }
 
 async function loadCategories() {
+  if (!currentProjectId) return;
   setLoading(true);
   try {
-    const data = await callTool('list_categories');
+    const data = await callTool('list_categories', {}, projectConfig());
     const list = $('#categories-list');
     const empty = $('#categories-empty');
 
@@ -186,7 +320,7 @@ async function loadTopics(category, push = true) {
   setLoading(true);
 
   try {
-    const data = await callTool('list_topics', { category });
+    const data = await callTool('list_topics', { category }, projectConfig());
     renderTopicList($('#topics-list'), data.topics || []);
   } catch (err) {
     toast(err.message);
@@ -235,7 +369,7 @@ async function doSearch() {
   $('#search-empty').classList.add('hidden');
 
   try {
-    const data = await callTool('semantic_search', { query, limit: 10 });
+    const data = await callTool('semantic_search', { query, limit: 10 }, projectConfig());
     if (!data.results || data.results.length === 0) {
       $('#search-results').innerHTML = '';
       $('#search-empty').classList.remove('hidden');
@@ -265,7 +399,7 @@ async function addDocument(e) {
   $('#add-result').classList.add('hidden');
 
   try {
-    const data = await callTool('add_doc', { url, contents });
+    const data = await callTool('add_doc', { url, contents }, projectConfig());
 
     // Show result
     const resultEl = $('#add-result');
@@ -307,7 +441,7 @@ async function loadDocument(docId, push = true) {
   setLoading(true);
 
   try {
-    const doc = await callTool('get_document', { id: docId });
+    const doc = await callTool('get_document', { id: docId }, projectConfig());
     $('#doc-detail').innerHTML = `
       <div class="doc-url"><a href="${esc(doc.url)}" target="_blank">${esc(doc.url)}</a></div>
       <div class="doc-date">${doc.createdAt ? new Date(doc.createdAt).toLocaleString() : ''}</div>
@@ -339,7 +473,7 @@ function initEndpoint() {
       localStorage.setItem(STORAGE_KEY, val);
       $('#endpoint-form').classList.add('hidden');
       toast('Endpoint saved', 'success');
-      loadCategories();
+      loadProjects().then(() => loadCategories());
     }
   });
 
@@ -359,7 +493,7 @@ function esc(str) {
 
 // ── Event Bindings ──
 
-function init() {
+async function init() {
   initEndpoint();
 
   // Nav links
@@ -385,12 +519,41 @@ function init() {
   // Add document
   $('#add-form').addEventListener('submit', addDocument);
 
+  // Project switcher
+  $('#project-select').addEventListener('change', (e) => {
+    const opt = e.target.selectedOptions[0];
+    if (opt && opt.value) {
+      setProject(opt.value, opt.textContent);
+      showView('categories');
+      loadCategories();
+    }
+  });
+
+  // Manage projects button
+  $('#manage-projects-btn').addEventListener('click', () => {
+    showView('projects');
+    loadProjectsList();
+  });
+
+  // Create project
+  $('#create-project-btn').addEventListener('click', createProject);
+  $('#new-project-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') createProject();
+  });
+
   // Set initial history state
   history.replaceState({ view: 'categories' }, '', '#categories');
 
   // Initial load
   if (endpoint) {
-    loadCategories();
+    const projects = await loadProjects();
+    if (projects.length > 0) {
+      loadCategories();
+    } else {
+      // No projects — show projects view to prompt creation
+      showView('projects');
+      loadProjectsList();
+    }
   } else {
     $('#endpoint-form').classList.remove('hidden');
   }

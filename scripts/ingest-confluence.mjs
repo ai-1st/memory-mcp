@@ -10,6 +10,7 @@
  *   CONFLUENCE_EMAIL   - your Atlassian email
  *   CONFLUENCE_TOKEN   - API token from https://id.atlassian.com/manage-profile/security/api-tokens
  *   MCP_URL            - Memory MCP endpoint (defaults to the deployed Lambda)
+ *   MCP_PROJECT_ID     - Project ID to ingest into (required)
  */
 
 const MCP_URL = process.env.MCP_URL || 'https://u5atpeuk5f4aabdba6bvcp4jfm0bpepd.lambda-url.us-east-1.on.aws/';
@@ -22,9 +23,14 @@ if (!url) {
 
 const email = process.env.CONFLUENCE_EMAIL;
 const token = process.env.CONFLUENCE_TOKEN;
+const projectId = process.env.MCP_PROJECT_ID;
 if (!email || !token) {
   console.error('Set CONFLUENCE_EMAIL and CONFLUENCE_TOKEN env vars.');
   console.error('Get a token at: https://id.atlassian.com/manage-profile/security/api-tokens');
+  process.exit(1);
+}
+if (!projectId) {
+  console.error('Set MCP_PROJECT_ID env var to the target project ID.');
   process.exit(1);
 }
 
@@ -92,6 +98,7 @@ const mcpRes = await fetch(MCP_URL, {
     method: 'tools/call',
     params: {
       name: 'add_doc',
+      config: { projectId },
       arguments: { url, contents: `# ${title}\n\n${text}` },
     },
   }),

@@ -13,6 +13,13 @@
         <span class="logo-icon">&#9673;</span>
         <span class="logo-text">Memory</span>
       </div>
+      <div class="project-switcher">
+        <label class="project-label">Project</label>
+        <select id="project-select">
+          <option value="">Loading...</option>
+        </select>
+        <button id="manage-projects-btn" class="btn-ghost btn-xs">Manage</button>
+      </div>
       <nav>
         <a href="#" data-view="categories" class="nav-item active">
           <span class="nav-icon">&#9783;</span> Categories
@@ -96,6 +103,21 @@
           <h1>Document</h1>
         </header>
         <div id="doc-detail" class="doc-detail"></div>
+      </section>
+
+      <!-- Projects View -->
+      <section id="view-projects" class="view">
+        <header class="view-header">
+          <h1>Projects</h1>
+        </header>
+        <div class="create-project-form">
+          <input type="text" id="new-project-name" placeholder="New project name..." autocomplete="off">
+          <button id="create-project-btn" class="btn-primary">Create</button>
+        </div>
+        <div id="projects-list" class="projects-list"></div>
+        <div id="projects-empty" class="empty-state hidden">
+          <p>No projects yet. Create one to get started.</p>
+        </div>
       </section>
 
       <!-- Loading Overlay -->
