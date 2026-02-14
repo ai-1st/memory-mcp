@@ -13,10 +13,21 @@ export const listTopics = {
     },
     required: ['category'],
   },
+  configSchema: {
+    type: 'object',
+    properties: {
+      projectId: {
+        type: 'string',
+        description: 'The project ID to scope this operation to',
+      },
+    },
+    required: ['projectId'],
+  },
 
-  async execute(args) {
+  async execute(args, config) {
     const { category } = args;
-    const topics = await queryTopicsByCategory(category);
+    const { projectId } = config;
+    const topics = await queryTopicsByCategory(projectId, category);
 
     const result = topics.map(t => ({
       id: t.id,
