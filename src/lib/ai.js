@@ -14,10 +14,10 @@ export async function extractTopics(contents, url) {
     schema: z.object({
       topics: z.array(z.object({
         category: z.string().describe('A hierarchical category path using "/" to separate levels, e.g. "devops/kubernetes/autoscaling", "programming/python/web-frameworks", "cloud/aws/lambda". Use lowercase kebab-case for each segment. Use 2-3 levels of depth.'),
-        summary: z.string().describe('A concise factual summary of the topic (1-3 sentences). Should stand on its own without the source document.'),
+        summary: z.string().describe('A detailed factual paragraph about the topic, 500-1000 characters long. Should be comprehensive, self-contained, and stand on its own without the source document. Include specific details, names, numbers, and relationships.'),
       })),
     }),
-    prompt: `Extract the key topics and facts from this document. Each topic should be a self-contained, factual statement that captures a distinct piece of knowledge.
+    prompt: `Extract the key topics and facts from this document. Each topic summary must be a substantial paragraph of 500-1000 characters that captures detailed knowledge. Be specific and include concrete details.
 
 Source URL: ${url}
 
@@ -46,7 +46,7 @@ export async function classifyTopicAction(newSummary, newCategory, similarTopics
     schema: z.object({
       action: z.enum(['ADD', 'REPLACE']).describe('ADD = create a brand new topic. REPLACE = merge with existing topics, replacing them.'),
       category: z.string().describe('The hierarchical category path using "/" to separate levels (e.g. "devops/kubernetes/autoscaling"). Use lowercase kebab-case, 2-3 levels.'),
-      summary: z.string().describe('The summary for the resulting topic. If REPLACE, merge relevant information from all topics being replaced.'),
+      summary: z.string().describe('A detailed factual paragraph about the topic, 500-1000 characters long. If REPLACE, merge relevant information from all topics being replaced into one comprehensive paragraph.'),
       replaceIds: z.array(z.string()).describe('If REPLACE, the IDs of existing topics to replace. Empty array if ADD.'),
     }),
     prompt: `You are deciding how to organize a knowledge base of topics.

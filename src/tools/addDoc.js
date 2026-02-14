@@ -25,13 +25,24 @@ export const addDoc = {
     },
     required: ['url', 'contents'],
   },
+  configSchema: {
+    type: 'object',
+    properties: {
+      projectId: {
+        type: 'string',
+        description: 'The project ID to scope this operation to',
+      },
+    },
+    required: ['projectId'],
+  },
 
-  async execute(args) {
+  async execute(args, config) {
     const { url, contents } = args;
+    const { projectId } = config;
     const docId = ulid();
 
     // 1. Store the document
-    await putDoc({ id: docId, url, contents });
+    await putDoc(projectId, { id: docId, url, contents });
 
     // 2. Extract topics via LLM
     const rawTopics = await extractTopics(contents, url);
@@ -46,7 +57,7 @@ export const addDoc = {
       const embedding = await generateEmbedding(raw.summary, hash);
 
       // 3b. Find similar existing topics
-      const similar = await findSimilarByEmbedding(embedding, 5);
+      const similar = await findSimilarByEmbedding(projectId, embedding, 5);
 
       // 3c. Classify: ADD or REPLACE
       const action = await classifyTopicAction(raw.summary, raw.category, similar);
@@ -59,14 +70,14 @@ export const addDoc = {
         const categoryDeltas = {}; // track category count changes
 
         for (const oldId of action.replaceIds) {
-          const oldTopic = await getTopic(oldId);
+          const oldTopic = await getTopic(projectId, oldId);
           if (oldTopic) {
             for (const did of (oldTopic.doc_ids || [])) {
               allDocIds.add(did);
             }
             // Move old topic to REPLACED
-            await replaceTopic(oldId, topicId);
-            await deleteVector(oldId);
+            await replaceTopic(projectId, oldId, topicId);
+            await deleteVector(projectId, oldId);
 
             // Decrement old category
             const oldCat = oldTopic.category;
@@ -86,8 +97,8 @@ export const addDoc = {
           sha256: newHash,
         };
 
-        await putTopic(topic);
-        await putVector(topicId, {
+        await putTopic(projectId, topic);
+        await putVector(projectId, topicId, {
           id: topicId,
           category: action.category,
           summary: action.summary,
@@ -100,7 +111,7 @@ export const addDoc = {
         // Apply all category deltas
         for (const [cat, delta] of Object.entries(categoryDeltas)) {
           if (delta !== 0) {
-            await incrementCategory(cat, delta);
+            await incrementCategory(projectId, cat, delta);
           }
         }
 
@@ -121,14 +132,14 @@ export const addDoc = {
           sha256: hash,
         };
 
-        await putTopic(topic);
-        await putVector(topicId, {
+        await putTopic(projectId, topic);
+        await putVector(projectId, topicId, {
           id: topicId,
           category: action.category,
           summary: action.summary,
           embedding,
         });
-        await incrementCategory(action.category, 1);
+        await incrementCategory(projectId, action.category, 1);
 
         results.push({
           action: 'ADD',

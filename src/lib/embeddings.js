@@ -15,6 +15,7 @@ const EMBED_MODEL = bedrock.textEmbeddingModel('amazon.titan-embed-text-v2:0');
 
 /**
  * Generate an embedding for text, using DDB cache keyed by sha256.
+ * (Global — not project-scoped.)
  */
 export async function generateEmbedding(text, sha256) {
   // Check cache first
@@ -32,24 +33,24 @@ export async function generateEmbedding(text, sha256) {
 }
 
 /**
- * Store a topic's embedding vector in S3.
+ * Store a topic's embedding vector in S3, scoped to project.
  */
-export async function putVector(topicId, data) {
+export async function putVector(projectId, topicId, data) {
   await s3.send(new PutObjectCommand({
     Bucket: BUCKET,
-    Key: `vectors/${topicId}.json`,
+    Key: `vectors/${projectId}/${topicId}.json`,
     Body: JSON.stringify(data),
     ContentType: 'application/json',
   }));
 }
 
 /**
- * Delete a topic's embedding vector from S3.
+ * Delete a topic's embedding vector from S3, scoped to project.
  */
-export async function deleteVector(topicId) {
+export async function deleteVector(projectId, topicId) {
   await s3.send(new DeleteObjectCommand({
     Bucket: BUCKET,
-    Key: `vectors/${topicId}.json`,
+    Key: `vectors/${projectId}/${topicId}.json`,
   }));
 }
 
@@ -70,9 +71,9 @@ async function getVector(key) {
 }
 
 /**
- * Load all vectors from S3, returns array of {id, category, summary, embedding}.
+ * Load all vectors for a project from S3, returns array of {id, category, summary, embedding}.
  */
-async function loadAllVectors() {
+async function loadAllVectors(projectId) {
   const vectors = [];
   let continuationToken;
 
@@ -80,7 +81,7 @@ async function loadAllVectors() {
     const { Contents, NextContinuationToken } = await s3.send(
       new ListObjectsV2Command({
         Bucket: BUCKET,
-        Prefix: 'vectors/',
+        Prefix: `vectors/${projectId}/`,
         ContinuationToken: continuationToken,
       })
     );
@@ -99,15 +100,15 @@ async function loadAllVectors() {
 }
 
 /**
- * Semantic search: embed query, load all vectors, return top-k by cosine similarity.
+ * Semantic search: embed query, load project vectors, return top-k by cosine similarity.
  */
-export async function searchSimilar(queryText, topK = 5) {
+export async function searchSimilar(projectId, queryText, topK = 5) {
   const { embedding: queryEmbedding } = await embed({
     model: EMBED_MODEL,
     value: queryText,
   });
 
-  const allVectors = await loadAllVectors();
+  const allVectors = await loadAllVectors(projectId);
   if (allVectors.length === 0) return [];
 
   const scored = allVectors.map(v => ({
@@ -122,10 +123,10 @@ export async function searchSimilar(queryText, topK = 5) {
 }
 
 /**
- * Find topics similar to a given embedding vector.
+ * Find topics similar to a given embedding vector, scoped to project.
  */
-export async function findSimilarByEmbedding(embedding, topK = 5) {
-  const allVectors = await loadAllVectors();
+export async function findSimilarByEmbedding(projectId, embedding, topK = 5) {
+  const allVectors = await loadAllVectors(projectId);
   if (allVectors.length === 0) return [];
 
   const scored = allVectors.map(v => ({

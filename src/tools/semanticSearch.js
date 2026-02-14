@@ -17,10 +17,21 @@ export const semanticSearch = {
     },
     required: ['query'],
   },
+  configSchema: {
+    type: 'object',
+    properties: {
+      projectId: {
+        type: 'string',
+        description: 'The project ID to scope this operation to',
+      },
+    },
+    required: ['projectId'],
+  },
 
-  async execute(args) {
+  async execute(args, config) {
     const { query, limit = 5 } = args;
-    const results = await searchSimilar(query, limit);
+    const { projectId } = config;
+    const results = await searchSimilar(projectId, query, limit);
 
     return {
       content: [{

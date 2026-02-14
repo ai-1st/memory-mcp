@@ -29,7 +29,6 @@ async function callTool(name, args = {}) {
 // ── State ──
 
 let currentView = 'categories';
-let navHistory = [];
 
 // ── DOM Refs ──
 
@@ -44,27 +43,41 @@ const views = {
   document: $('#view-document'),
 };
 
-// ── Navigation ──
+// ── Navigation (History API) ──
 
-function showView(name, pushHistory = true) {
-  if (pushHistory && currentView !== name) {
-    navHistory.push(currentView);
-  }
+function showView(name, { push = true, context = {} } = {}) {
   currentView = name;
 
   Object.values(views).forEach(v => v.classList.remove('active'));
   views[name]?.classList.add('active');
 
-  // Update nav active state
   $$('.nav-item').forEach(a => {
     a.classList.toggle('active', a.dataset.view === name);
   });
+
+  if (push) {
+    history.pushState({ view: name, ...context }, '', `#${name}${context.id ? '/' + context.id : ''}`);
+  }
 }
 
 function goBack() {
-  const prev = navHistory.pop();
-  if (prev) showView(prev, false);
+  history.back();
 }
+
+// Restore view on browser back/forward
+window.addEventListener('popstate', async (e) => {
+  const state = e.state || { view: 'categories' };
+  showView(state.view, { push: false });
+
+  // Re-fetch data for data-driven views
+  if (state.view === 'categories') {
+    await loadCategories();
+  } else if (state.view === 'topics' && state.category) {
+    await loadTopics(state.category, false);
+  } else if (state.view === 'document' && state.docId) {
+    await loadDocument(state.docId, false);
+  }
+});
 
 // ── Loading & Toast ──
 
@@ -167,8 +180,8 @@ async function loadCategories() {
 
 // ── Topics View ──
 
-async function loadTopics(category) {
-  showView('topics');
+async function loadTopics(category, push = true) {
+  showView('topics', { push, context: { category } });
   $('#topics-title').textContent = category;
   setLoading(true);
 
@@ -289,8 +302,8 @@ async function addDocument(e) {
 
 // ── Document View ──
 
-async function loadDocument(docId) {
-  showView('document');
+async function loadDocument(docId, push = true) {
+  showView('document', { push, context: { docId } });
   setLoading(true);
 
   try {
@@ -360,10 +373,7 @@ function init() {
   });
 
   // Back buttons
-  $('#topics-back').addEventListener('click', () => {
-    goBack();
-    loadCategories();
-  });
+  $('#topics-back').addEventListener('click', () => goBack());
   $('#doc-back').addEventListener('click', () => goBack());
 
   // Search
@@ -375,11 +385,13 @@ function init() {
   // Add document
   $('#add-form').addEventListener('submit', addDocument);
 
+  // Set initial history state
+  history.replaceState({ view: 'categories' }, '', '#categories');
+
   // Initial load
   if (endpoint) {
     loadCategories();
   } else {
-    // Show endpoint form if not configured
     $('#endpoint-form').classList.remove('hidden');
   }
 }

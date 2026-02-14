@@ -7,9 +7,20 @@ export const listCategories = {
     type: 'object',
     properties: {},
   },
+  configSchema: {
+    type: 'object',
+    properties: {
+      projectId: {
+        type: 'string',
+        description: 'The project ID to scope this operation to',
+      },
+    },
+    required: ['projectId'],
+  },
 
-  async execute() {
-    const categories = await queryCategories();
+  async execute(args, config) {
+    const { projectId } = config;
+    const categories = await queryCategories(projectId);
 
     const result = categories.map(c => ({
       category: c.category,
