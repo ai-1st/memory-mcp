@@ -3,11 +3,20 @@ import { validateRequest, parseRequestBody, createErrorResponse } from './mcp/ut
 
 /**
  * Lambda handler for MCP server
+ *
+ * Config can be provided in two ways:
+ *   1. In the JSON-RPC payload: params.config (standard WebTools extension)
+ *   2. As URL query parameters (fallback for clients that don't support the extension)
+ *
+ * Query parameters are merged into params.config, with payload config taking precedence.
  */
 export const handler = async (event) => {
   // Note: CORS is handled by Lambda Function URL configuration in template.yaml
   // No need to manually add CORS headers here
-  
+
+  // Extract query string parameters (fallback config source)
+  const queryConfig = event.queryStringParameters || {};
+
   // Parse request body
   let request;
   try {
@@ -42,6 +51,14 @@ export const handler = async (event) => {
         'Invalid Request',
         validation.error
       ))
+    };
+  }
+
+  // Merge query params into config (payload config wins over query params)
+  if (Object.keys(queryConfig).length > 0 && request.params) {
+    request.params.config = {
+      ...queryConfig,
+      ...(request.params.config || {}),
     };
   }
   

@@ -2,7 +2,7 @@ import { searchSimilar } from '../lib/embeddings.js';
 
 export const semanticSearch = {
   name: 'semantic_search',
-  description: 'Search topics by semantic similarity to a query',
+  description: 'Search how-tos by semantic similarity to a query',
   inputSchema: {
     type: 'object',
     properties: {
@@ -41,8 +41,10 @@ export const semanticSearch = {
           results: results.map(r => ({
             id: r.id,
             category: r.category,
+            title: r.title,
             summary: r.summary,
             score: Math.round(r.score * 1000) / 1000,
+            doc_ids: r.doc_ids || [],
           })),
         }, null, 2),
       }],

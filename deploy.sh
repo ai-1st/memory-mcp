@@ -1,0 +1,1 @@
+sam build && sam deploy --stack-name memory-mcp --region us-east-1 --resolve-s3 --capabilities CAPABILITY_IAM --no-confirm-changeset

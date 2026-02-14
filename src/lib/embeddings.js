@@ -114,7 +114,9 @@ export async function searchSimilar(projectId, queryText, topK = 5) {
   const scored = allVectors.map(v => ({
     id: v.id,
     category: v.category,
+    title: v.title,
     summary: v.summary,
+    doc_ids: v.doc_ids || [],
     score: cosineSimilarity(queryEmbedding, v.embedding),
   }));
 
@@ -123,7 +125,7 @@ export async function searchSimilar(projectId, queryText, topK = 5) {
 }
 
 /**
- * Find topics similar to a given embedding vector, scoped to project.
+ * Find entries similar to a given embedding vector, scoped to project.
  */
 export async function findSimilarByEmbedding(projectId, embedding, topK = 5) {
   const allVectors = await loadAllVectors(projectId);
@@ -132,7 +134,9 @@ export async function findSimilarByEmbedding(projectId, embedding, topK = 5) {
   const scored = allVectors.map(v => ({
     id: v.id,
     category: v.category,
+    title: v.title,
     summary: v.summary,
+    doc_ids: v.doc_ids || [],
     score: cosineSimilarity(embedding, v.embedding),
   }));
 

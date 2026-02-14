@@ -88,6 +88,7 @@ export async function putTopic(projectId, topic) {
       GSI1SK: `TOPIC#${topic.id}`,
       id: topic.id,
       category: topic.category,
+      title: topic.title,
       summary: topic.summary,
       doc_ids: topic.doc_ids,
       sha256: topic.sha256,

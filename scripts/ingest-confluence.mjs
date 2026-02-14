@@ -121,7 +121,9 @@ try {
 }
 
 console.log(`\nDoc ID: ${result.docId}`);
-console.log(`Topics: ${result.topicsProcessed}`);
-for (const t of result.topics) {
-  console.log(`  [${t.action}] ${t.category} - ${t.summary.slice(0, 80)}...`);
+const count = result.howTosProcessed || result.topicsProcessed || 0;
+console.log(`How-tos: ${count}`);
+const items = result.howtos || result.topics || [];
+for (const t of items) {
+  console.log(`  [${t.action}] ${t.category} - ${(t.title || t.summary || '').slice(0, 80)}...`);
 }

@@ -5,19 +5,37 @@ import { z } from 'zod';
 const MODEL = bedrock('us.anthropic.claude-sonnet-4-5-20250929-v1:0');
 
 /**
- * Extract topics from document contents.
- * Returns array of {category, summary}.
+ * Extract how-tos from document contents.
+ * Returns { summary, howtos: [{ category, title, steps, notes }] }.
+ *
+ * - summary: a high-level how-to that captures the overall purpose of the document
+ * - howtos: specific, actionable procedures found in the document
  */
-export async function extractTopics(contents, url) {
+export async function extractHowTos(contents, url) {
   const { object } = await generateObject({
     model: MODEL,
     schema: z.object({
-      topics: z.array(z.object({
-        category: z.string().describe('A hierarchical category path using "/" to separate levels, e.g. "devops/kubernetes/autoscaling", "programming/python/web-frameworks", "cloud/aws/lambda". Use lowercase kebab-case for each segment. Use 2-3 levels of depth.'),
-        summary: z.string().describe('A detailed factual paragraph about the topic, 500-1000 characters long. Should be comprehensive, self-contained, and stand on its own without the source document. Include specific details, names, numbers, and relationships.'),
+      summary: z.object({
+        category: z.string().describe('A hierarchical category path using "/" to separate levels, e.g. "devops/monitoring/datadog", "runbooks/incident-response". Use lowercase kebab-case for each segment, 2-3 levels.'),
+        title: z.string().describe('A concise title for the overall how-to, e.g. "How to manage Khoros deployments" or "How to troubleshoot authentication failures". Start with "How to".'),
+        body: z.string().describe('A high-level summary (500-1000 chars) of what this document teaches you to do. Describe the overall purpose, when you would use these procedures, and what systems/tools are involved. This should help someone decide if this document is relevant to their problem.'),
+      }),
+      howtos: z.array(z.object({
+        category: z.string().describe('A hierarchical category path using "/" to separate levels, e.g. "devops/kubernetes/scaling", "runbooks/database/backup". Use lowercase kebab-case, 2-3 levels.'),
+        title: z.string().describe('A concise action-oriented title starting with "How to", e.g. "How to restart the Khoros application server", "How to rotate database credentials".'),
+        steps: z.string().describe('The step-by-step procedure (500-2000 chars). Use numbered steps. Include specific commands, paths, URLs, config values, and expected outputs. Should be actionable by someone following along.'),
+        notes: z.string().describe('Important warnings, prerequisites, gotchas, or context (0-500 chars). Empty string if none.'),
       })),
     }),
-    prompt: `Extract the key topics and facts from this document. Each topic summary must be a substantial paragraph of 500-1000 characters that captures detailed knowledge. Be specific and include concrete details.
+    prompt: `Extract actionable how-to procedures from this document. A single document may describe how to do many different things — extract each as a separate how-to.
+
+For each how-to:
+- Title should start with "How to"
+- Steps should be numbered and specific enough to follow
+- Include exact commands, file paths, URLs, config keys, and expected outputs
+- Include prerequisites or warnings in notes
+
+Also produce a high-level summary how-to that captures the overall purpose of the document — this helps match generic searches like "how do I deal with X" to the right document.
 
 Source URL: ${url}
 
@@ -25,44 +43,46 @@ Document contents:
 ${contents}`,
   });
 
-  return object.topics;
+  return object;
 }
 
 /**
- * Given a new topic and similar existing topics, decide whether to ADD as new
- * or REPLACE existing topics with a merged one.
+ * Given a new how-to and similar existing ones, decide whether to ADD as new
+ * or REPLACE existing entries with a merged one.
  */
-export async function classifyTopicAction(newSummary, newCategory, similarTopics) {
-  if (similarTopics.length === 0) {
-    return { action: 'ADD', category: newCategory, summary: newSummary, replaceIds: [] };
+export async function classifyHowToAction(newBody, newCategory, newTitle, similarItems) {
+  if (similarItems.length === 0) {
+    return { action: 'ADD', category: newCategory, title: newTitle, summary: newBody, replaceIds: [] };
   }
 
-  const similarContext = similarTopics
+  const similarContext = similarItems
     .map((t, i) => `[${i}] id=${t.id} category="${t.category}" summary="${t.summary}" (similarity: ${t.score.toFixed(3)})`)
     .join('\n');
 
   const { object } = await generateObject({
     model: MODEL,
     schema: z.object({
-      action: z.enum(['ADD', 'REPLACE']).describe('ADD = create a brand new topic. REPLACE = merge with existing topics, replacing them.'),
-      category: z.string().describe('The hierarchical category path using "/" to separate levels (e.g. "devops/kubernetes/autoscaling"). Use lowercase kebab-case, 2-3 levels.'),
-      summary: z.string().describe('A detailed factual paragraph about the topic, 500-1000 characters long. If REPLACE, merge relevant information from all topics being replaced into one comprehensive paragraph.'),
-      replaceIds: z.array(z.string()).describe('If REPLACE, the IDs of existing topics to replace. Empty array if ADD.'),
+      action: z.enum(['ADD', 'REPLACE']).describe('ADD = create a brand new entry. REPLACE = merge with existing entries, replacing them.'),
+      category: z.string().describe('The hierarchical category path using "/" to separate levels. Use lowercase kebab-case, 2-3 levels.'),
+      title: z.string().describe('A concise action-oriented title starting with "How to".'),
+      summary: z.string().describe('The merged how-to content (500-2000 chars). If REPLACE, combine the steps and details from all entries being replaced into one comprehensive procedure.'),
+      replaceIds: z.array(z.string()).describe('If REPLACE, the IDs of existing entries to replace. Empty array if ADD.'),
     }),
-    prompt: `You are deciding how to organize a knowledge base of topics.
+    prompt: `You are organizing a knowledge base of how-to procedures.
 
-A new topic has been extracted from a document:
+A new how-to has been extracted from a document:
   category: "${newCategory}"
-  summary: "${newSummary}"
+  title: "${newTitle}"
+  content: "${newBody}"
 
-Here are the most similar existing topics in the knowledge base:
+Here are the most similar existing entries in the knowledge base:
 ${similarContext}
 
 Rules:
-- If the new topic covers substantially the same fact(s) as one or more existing topics (similarity > 0.85), choose REPLACE and merge the information into a single improved summary.
-- If the new topic is distinct, choose ADD.
-- When replacing, include ALL topic IDs that are being superseded.
-- The merged summary should be comprehensive, combining information from all sources.`,
+- If the new how-to covers substantially the same procedure as one or more existing entries (similarity > 0.85), choose REPLACE and merge the information into a single improved how-to.
+- If the new how-to is a distinct procedure, choose ADD.
+- When replacing, include ALL entry IDs that are being superseded.
+- The merged content should combine steps and details from all sources into one comprehensive procedure.`,
   });
 
   return object;

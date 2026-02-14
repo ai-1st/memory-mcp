@@ -32,6 +32,7 @@ export const listTopics = {
     const result = topics.map(t => ({
       id: t.id,
       category: t.category,
+      title: t.title,
       summary: t.summary,
       doc_ids: t.doc_ids,
       sha256: t.sha256,

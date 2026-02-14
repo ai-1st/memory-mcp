@@ -4,7 +4,7 @@ Description: Memory MCP Server
 
 Globals:
   Function:
-    Timeout: 60
+    Timeout: 300
     MemorySize: 512
     Runtime: nodejs22.x
     Architectures:

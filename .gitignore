@@ -27,6 +27,13 @@ Thumbs.db
 dist/
 build/
 
+# Browser test artifacts
+*-test/
+*-debug/
+*-REPORT.md
+test-*.js
+debug-*.js
+
 
 
 
