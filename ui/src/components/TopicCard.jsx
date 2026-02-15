@@ -19,6 +19,9 @@ export default function TopicCard({ topic, showScore = false }) {
       <div className="topic-summary">
         <Markdown>{topic.summary}</Markdown>
       </div>
+      {topic.summary && (
+        <span className="topic-chars">{topic.summary.length.toLocaleString()} chars</span>
+      )}
       <div className="topic-meta">
         <span className="topic-id">{topic.id}</span>
         {(topic.doc_ids || []).map(did => (

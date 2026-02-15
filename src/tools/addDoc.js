@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { ulid } from 'ulid';
-import { putDoc, putTopic, getTopic, replaceTopic, incrementCategory } from '../lib/db.js';
+import { putDoc, putTopic, getTopic, replaceTopic, incrementCategory, getProject } from '../lib/db.js';
 import { generateEmbedding, putVector, deleteVector, findSimilarByEmbedding } from '../lib/embeddings.js';
 import { extractHowTos, classifyHowToAction } from '../lib/ai.js';
 
@@ -11,7 +11,7 @@ function sha256(text) {
 /**
  * Store a how-to entry (or merge with existing), returning the result record.
  */
-async function processEntry(projectId, docId, { category, title, body }, results) {
+async function processEntry(projectId, docId, { category, title, body }, categorizationRules = '') {
   const textToEmbed = `${title}\n\n${body}`;
   const hash = sha256(textToEmbed);
 
@@ -22,7 +22,7 @@ async function processEntry(projectId, docId, { category, title, body }, results
   const similar = await findSimilarByEmbedding(projectId, embedding, 5);
 
   // Classify: ADD or REPLACE
-  const action = await classifyHowToAction(body, category, title, similar);
+  const action = await classifyHowToAction(body, category, title, similar, categorizationRules);
 
   const topicId = ulid();
 
@@ -77,14 +77,14 @@ async function processEntry(projectId, docId, { category, title, body }, results
       }
     }
 
-    results.push({
+    return {
       action: 'REPLACE',
       topicId,
       category: action.category,
       title: action.title,
       summary: action.summary,
       replaced: action.replaceIds,
-    });
+    };
   } else {
     // ADD new entry
     const topic = {
@@ -107,13 +107,13 @@ async function processEntry(projectId, docId, { category, title, body }, results
     });
     await incrementCategory(projectId, action.category, 1);
 
-    results.push({
+    return {
       action: 'ADD',
       topicId,
       category: action.category,
       title: action.title,
       summary: body,
-    });
+    };
   }
 }
 
@@ -150,33 +150,29 @@ export const addDoc = {
     const { projectId } = config;
     const docId = ulid();
 
-    // 1. Store the document
+    // 1. Fetch project for categorization rules
+    const project = await getProject(projectId);
+    const rules = project?.rules || '';
+
+    // 2. Store the document
     await putDoc(projectId, { id: docId, url, contents });
 
-    // 2. Extract how-tos via LLM
-    const { summary, howtos } = await extractHowTos(contents, url);
+    // 3. Extract how-tos via LLM (with project categorization rules)
+    const { summary, howtos } = await extractHowTos(contents, url, rules);
 
-    const results = [];
+    // 4. Process all entries in parallel
+    const entries = [
+      { category: summary.category, title: summary.title, body: summary.body },
+      ...howtos.map(h => ({
+        category: h.category,
+        title: h.title,
+        body: h.notes ? `${h.steps}\n\nNotes: ${h.notes}` : h.steps,
+      })),
+    ];
 
-    // 3. Process the high-level summary how-to first
-    await processEntry(projectId, docId, {
-      category: summary.category,
-      title: summary.title,
-      body: summary.body,
-    }, results);
-
-    // 4. Process each specific how-to
-    for (const howto of howtos) {
-      const body = howto.notes
-        ? `${howto.steps}\n\nNotes: ${howto.notes}`
-        : howto.steps;
-
-      await processEntry(projectId, docId, {
-        category: howto.category,
-        title: howto.title,
-        body,
-      }, results);
-    }
+    const results = await Promise.all(
+      entries.map(entry => processEntry(projectId, docId, entry, rules))
+    );
 
     return {
       content: [{

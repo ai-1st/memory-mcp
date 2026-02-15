@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { callTool } from '../lib/mcp';
+import { callTool, getEndpoint } from '../lib/mcp';
 import { useApp } from '../lib/store';
 
 export default function Projects() {
@@ -44,6 +44,20 @@ export default function Projects() {
     showToast(`Switched to "${p.name}"`, 'success');
   }
 
+  function copyMcpConfig(e, p) {
+    e.stopPropagation();
+    const config = {
+      mcpServers: {
+        "memory-mcp": {
+          url: getEndpoint(),
+          config: { projectId: p.id },
+        },
+      },
+    };
+    navigator.clipboard.writeText(JSON.stringify(config, null, 2));
+    showToast(`MCP config copied for "${p.name}"`, 'success');
+  }
+
   return (
     <section className="view-section">
       <header className="view-header">
@@ -72,12 +86,23 @@ export default function Projects() {
               className={`project-row${p.id === projectId ? ' selected' : ''}`}
               onClick={() => handleSelect(p)}
             >
-              <span className="project-row-name">{p.name}</span>
-              {p.id === projectId && <span className="project-row-active">Active</span>}
-              <span className="project-row-id">{p.id.slice(0, 8)}...</span>
-              <span className="project-row-date">
-                {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : ''}
-              </span>
+              <div className="project-row-info">
+                <div className="project-row-top">
+                  <span className="project-row-name">{p.name}</span>
+                  {p.id === projectId && <span className="project-row-active">Active</span>}
+                  <span className="project-row-date">
+                    {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : ''}
+                  </span>
+                </div>
+                <span className="project-row-ulid">{p.id}</span>
+              </div>
+              <button
+                className="btn-copy-config"
+                title="Copy MCP config JSON"
+                onClick={e => copyMcpConfig(e, p)}
+              >
+                Copy MCP Config
+              </button>
             </div>
           ))}
         </div>

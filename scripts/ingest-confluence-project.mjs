@@ -4,16 +4,21 @@
  * Create a project and ingest a Confluence parent page + all descendant pages (recursive).
  *
  * Usage:
- *   node scripts/ingest-confluence-project.mjs <project-name> <confluence-parent-url> [--dry-run]
+ *   node scripts/ingest-confluence-project.mjs <project-name> <confluence-parent-url> [options]
  *
  * Options:
- *   --dry-run   Only discover pages, don't create a project or ingest anything
+ *   --dry-run           Only discover pages, don't create a project or ingest anything
+ *   --rules "text"      Categorization rules for the project (how categories should be assigned)
+ *   --rules-file path   Read categorization rules from a file
  *
  * Example:
  *   node scripts/ingest-confluence-project.mjs "My Project" \
  *     https://myorg.atlassian.net/wiki/spaces/TEAM/pages/12345/Parent+Page
  *   node scripts/ingest-confluence-project.mjs "My Project" \
  *     https://myorg.atlassian.net/wiki/spaces/TEAM/pages/12345/Parent+Page --dry-run
+ *   node scripts/ingest-confluence-project.mjs "My Project" \
+ *     https://myorg.atlassian.net/wiki/spaces/TEAM/pages/12345/Parent+Page \
+ *     --rules-file ./rules/my-project.txt
  *
  * Env vars:
  *   CONFLUENCE_EMAIL   - your Atlassian email
@@ -21,16 +26,46 @@
  *   MCP_URL            - Memory MCP endpoint (defaults to the deployed Lambda)
  */
 
-const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
-const flags = process.argv.slice(2).filter(a => a.startsWith('--'));
-const dryRun = flags.includes('--dry-run');
+import { readFileSync } from 'fs';
 
-const projectName = args[0];
-const parentUrl = args[1];
+// Parse CLI args: positional args vs flags/options
+const positional = [];
+const cliFlags = new Set();
+const cliOptions = {};
+
+{
+  const raw = process.argv.slice(2);
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === '--dry-run') {
+      cliFlags.add('dry-run');
+    } else if (raw[i] === '--rules' && i + 1 < raw.length) {
+      cliOptions.rules = raw[++i];
+    } else if (raw[i] === '--rules-file' && i + 1 < raw.length) {
+      cliOptions.rulesFile = raw[++i];
+    } else if (!raw[i].startsWith('--')) {
+      positional.push(raw[i]);
+    }
+  }
+}
+
+const dryRun = cliFlags.has('dry-run');
+const projectName = positional[0];
+const parentUrl = positional[1];
 
 if (!projectName || !parentUrl) {
-  console.error('Usage: node scripts/ingest-confluence-project.mjs <project-name> <confluence-parent-url> [--dry-run]');
+  console.error('Usage: node scripts/ingest-confluence-project.mjs <project-name> <confluence-parent-url> [options]');
+  console.error('Options: --dry-run  --rules "text"  --rules-file path');
   process.exit(1);
+}
+
+// Resolve categorization rules
+let categorizationRules = '';
+if (cliOptions.rulesFile) {
+  categorizationRules = readFileSync(cliOptions.rulesFile, 'utf-8').trim();
+  console.log(`Loaded categorization rules from ${cliOptions.rulesFile} (${categorizationRules.length} chars)`);
+} else if (cliOptions.rules) {
+  categorizationRules = cliOptions.rules.trim();
+  console.log(`Using inline categorization rules (${categorizationRules.length} chars)`);
 }
 
 const MCP_URL = process.env.MCP_URL || 'https://u5atpeuk5f4aabdba6bvcp4jfm0bpepd.lambda-url.us-east-1.on.aws/';
@@ -85,32 +120,24 @@ async function getChildren(parentId, childType, expand = '') {
 }
 
 /**
- * Recursively discover all descendant pages (and folders).
- * Folders are traversed but marked with isFolder=true so they can be skipped during ingestion.
- * Returns flat array with depth info.
+ * Recursively discover and ingest pages as they are found.
+ * Calls onPage(page, depth) for each page discovered.
  */
-async function discoverAll(parentId, depth = 0) {
-  // Fetch child pages (with body for ingestion) and child folders (no body, just for recursion)
+async function walkPages(parentId, onPage, depth = 0) {
   const [childPages, childFolders] = await Promise.all([
     getChildren(parentId, 'page', 'body.storage'),
     getChildren(parentId, 'folder'),
   ]);
 
-  let all = [];
-
   for (const folder of childFolders) {
-    all.push({ ...folder, depth, isFolder: true });
-    const nested = await discoverAll(folder.id, depth + 1);
-    all.push(...nested);
+    console.log(`${'  '.repeat(depth)}[folder] ${folder.title}`);
+    await walkPages(folder.id, onPage, depth + 1);
   }
 
   for (const page of childPages) {
-    all.push({ ...page, depth });
-    const nested = await discoverAll(page.id, depth + 1);
-    all.push(...nested);
+    await onPage(page, depth);
+    await walkPages(page.id, onPage, depth + 1);
   }
-
-  return all;
 }
 
 async function mcpCall(name, args = {}, config = {}) {
@@ -163,76 +190,32 @@ function pageLink(pageId, title) {
 
 // ── Main ──
 
-// 1. Discover all descendant pages and folders (recursive)
-console.log(`Discovering all pages under ${parentPageId}...`);
-const allItems = await discoverAll(parentPageId);
-const allPages = allItems.filter(p => !p.isFolder);
-const allFolders = allItems.filter(p => p.isFolder);
-console.log(`Found ${allItems.length} items: ${allPages.length} pages + ${allFolders.length} folders`);
-for (const p of allItems) {
-  const tag = p.isFolder ? ' [folder]' : '';
-  console.log(`  ${'  '.repeat(p.depth)}- ${p.title}${tag}`);
-}
-
-if (dryRun) {
-  console.log(`\n--dry-run: stopping here (no project created, nothing ingested)`);
-  process.exit(0);
-}
-
-// 2. Create the project
-console.log(`\nCreating project "${projectName}"...`);
-const project = await mcpCall('create_project', { name: projectName });
-const projectId = project.id;
-console.log(`Project created: ${projectId}\n`);
-
-// 3. Ingest the parent page itself
-console.log(`[0/${allPages.length + 1}] Ingesting parent page...`);
-try {
-  const parentPage = await confluenceGet(
-    `/wiki/rest/api/content/${parentPageId}?expand=body.storage`
-  );
-  const parentText = htmlToText(parentPage.body.storage.value);
-
-  if (parentText.length > 50) {
-    const result = await mcpCall('add_doc', {
-      url: parentUrl,
-      contents: `# ${parentPage.title}\n\n${parentText}`,
-    }, { projectId });
-    const count = result.howTosProcessed || result.topicsProcessed || 0;
-    console.log(`  -> ${count} how-tos extracted`);
-  } else {
-    console.log(`  -> Skipped (too short: ${parentText.length} chars)`);
-  }
-} catch (err) {
-  console.error(`  -> Error: ${err.message}`);
-}
-
-// 4. Ingest each descendant page (folders are skipped)
+let projectId;
 let success = 0;
 let skipped = 0;
 let errors = 0;
+let count = 0;
 
-for (let i = 0; i < allPages.length; i++) {
-  const page = allPages[i];
-  const title = page.title;
-  const bodyHtml = page.body?.storage?.value || '';
+async function ingestPage(title, url, bodyHtml) {
   const text = htmlToText(bodyHtml);
-
-  console.log(`[${i + 1}/${allPages.length}] ${title} (${text.length} chars)`);
+  count++;
+  console.log(`[${count}] ${title} (${text.length} chars)`);
 
   if (text.length < 50) {
     console.log(`  -> Skipped (too short)`);
     skipped++;
-    continue;
+    return;
   }
+
+  if (dryRun) return;
 
   try {
     const result = await mcpCall('add_doc', {
-      url: pageLink(page.id, title),
+      url,
       contents: `# ${title}\n\n${text}`,
     }, { projectId });
-    const count = result.howTosProcessed || result.topicsProcessed || 0;
-    console.log(`  -> ${count} how-tos extracted`);
+    const n = result.howTosProcessed || result.topicsProcessed || 0;
+    console.log(`  -> ${n} how-tos extracted`);
     success++;
   } catch (err) {
     console.error(`  -> Error: ${err.message}`);
@@ -240,9 +223,39 @@ for (let i = 0; i < allPages.length; i++) {
   }
 }
 
+// 1. Create project (unless dry-run)
+if (!dryRun) {
+  console.log(`Creating project "${projectName}"...`);
+  const createArgs = { name: projectName };
+  if (categorizationRules) createArgs.rules = categorizationRules;
+  const project = await mcpCall('create_project', createArgs);
+  projectId = project.id;
+  console.log(`Project created: ${projectId}`);
+  if (categorizationRules) console.log(`  Categorization rules attached (${categorizationRules.length} chars)`);
+  console.log('');
+}
+
+// 2. Ingest parent page
+console.log(`Fetching parent page ${parentPageId}...`);
+const parentPage = await confluenceGet(
+  `/wiki/rest/api/content/${parentPageId}?expand=body.storage`
+);
+await ingestPage(parentPage.title, parentUrl, parentPage.body?.storage?.value || '');
+
+// 3. Walk and ingest children as they are discovered
+console.log(`\nCrawling child pages...`);
+await walkPages(parentPageId, async (page, depth) => {
+  const indent = '  '.repeat(depth);
+  const url = pageLink(page.id, page.title);
+  const bodyHtml = page.body?.storage?.value || '';
+  await ingestPage(`${indent}${page.title}`, url, bodyHtml);
+});
+
 console.log(`\n${'='.repeat(50)}`);
 console.log(`Done!`);
-console.log(`  Project:  ${projectName} (${projectId})`);
-console.log(`  Ingested: ${success + 1} pages`);
+if (!dryRun) {
+  console.log(`  Project:  ${projectName} (${projectId})`);
+}
+console.log(`  Ingested: ${success} pages`);
 console.log(`  Skipped:  ${skipped}`);
 console.log(`  Errors:   ${errors}`);

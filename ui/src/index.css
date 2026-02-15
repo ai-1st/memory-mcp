@@ -335,6 +335,11 @@ body {
   color: var(--text-1);
   line-height: 1.6;
 }
+.topic-chars {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-2);
+}
 .topic-meta {
   display: flex;
   align-items: center;
@@ -463,7 +468,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 480px;
+  max-width: 600px;
 }
 .project-row {
   display: flex;
@@ -478,9 +483,22 @@ body {
 }
 .project-row:hover { border-color: var(--accent); }
 .project-row.selected { border-color: var(--accent); background: var(--accent-dim); }
-.project-row-name { font-size: 14px; font-weight: 600; color: var(--text-0); flex: 1; }
-.project-row-id { font-size: 11px; font-family: var(--mono); color: var(--text-2); }
+.project-row-info { flex: 1; min-width: 0; }
+.project-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.project-row-name { font-size: 14px; font-weight: 600; color: var(--text-0); }
 .project-row-date { font-size: 11px; color: var(--text-2); }
+.project-row-ulid {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-2);
+  display: block;
+  user-select: all;
+}
 .project-row-active {
   font-size: 10px;
   font-weight: 600;
@@ -490,6 +508,25 @@ body {
   background: var(--green-dim);
   padding: 2px 8px;
   border-radius: 4px;
+  flex-shrink: 0;
+}
+.btn-copy-config {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-1);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.btn-copy-config:hover {
+  color: var(--text-0);
+  border-color: var(--accent);
+  background: var(--accent-dim);
 }
 
 /* ── Empty State ── */

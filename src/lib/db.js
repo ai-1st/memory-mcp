@@ -16,16 +16,15 @@ const TABLE = process.env.TABLE_NAME;
 // ── Projects ──
 
 export async function putProject(project) {
-  await ddb.send(new PutCommand({
-    TableName: TABLE,
-    Item: {
-      PK: 'PROJECT',
-      SK: `PROJECT#${project.id}`,
-      id: project.id,
-      name: project.name,
-      createdAt: new Date().toISOString(),
-    },
-  }));
+  const item = {
+    PK: 'PROJECT',
+    SK: `PROJECT#${project.id}`,
+    id: project.id,
+    name: project.name,
+    createdAt: new Date().toISOString(),
+  };
+  if (project.rules) item.rules = project.rules;
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
 }
 
 export async function getProject(id) {
