@@ -13,14 +13,6 @@ markup:
   highlight:
     noClasses: false
 
-menu:
-  main:
-    - name: Topics
-      pageRef: /topics
-      weight: 1
-    - name: Sources
-      pageRef: /sources
-      weight: 2
 
 params:
   navbar:
@@ -32,3 +24,12 @@ params:
     width: wide
   sidebar:
     excludedPaths: []
+
+menu:
+  main:
+    - name: Topics
+      pageRef: /01khegj05bwrmx0krm5rvtazxq/topics
+      weight: 1
+    - name: Sources
+      pageRef: /01khegj05bwrmx0krm5rvtazxq/sources
+      weight: 2

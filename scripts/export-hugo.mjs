@@ -10,12 +10,12 @@
  *   MCP_URL - Memory MCP endpoint (defaults to the deployed Lambda)
  *
  * Output:
- *   site/content/topics/<category-path>/_index.md      -- category index pages
- *   site/content/topics/<category-path>/<topic-id>.md  -- topic pages
- *   site/content/sources/<doc-id>.md                   -- source document pages
+ *   site/content/<project-id>/topics/<category-path>/_index.md      -- category index pages
+ *   site/content/<project-id>/topics/<category-path>/<topic-id>.md  -- topic pages
+ *   site/content/<project-id>/sources/<doc-id>.md                   -- source document pages
  */
 
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -88,19 +88,23 @@ function writeMd(filePath, frontmatter, body) {
   writeFileSync(filePath, `---\n${fm}\n---\n\n${body}\n`);
 }
 
-// Clean generated content (preserve _index.md at section roots)
-function cleanGeneratedContent() {
-  try { rmSync(join(SITE_CONTENT, 'topics'), { recursive: true, force: true }); } catch {}
-  try { rmSync(join(SITE_CONTENT, 'sources'), { recursive: true, force: true }); } catch {}
+const PROJECT_CONTENT = join(SITE_CONTENT, projectId);
 
-  mkdirSync(join(SITE_CONTENT, 'topics'), { recursive: true });
-  mkdirSync(join(SITE_CONTENT, 'sources'), { recursive: true });
+function cleanGeneratedContent(projectName) {
+  try { rmSync(PROJECT_CONTENT, { recursive: true, force: true }); } catch {}
 
-  writeMd(join(SITE_CONTENT, 'topics', '_index.md'),
+  mkdirSync(join(PROJECT_CONTENT, 'topics'), { recursive: true });
+  mkdirSync(join(PROJECT_CONTENT, 'sources'), { recursive: true });
+
+  writeMd(join(PROJECT_CONTENT, '_index.md'),
+    { title: projectName, type: 'docs', sidebar: { open: true } },
+    '');
+
+  writeMd(join(PROJECT_CONTENT, 'topics', '_index.md'),
     { title: 'Topics', type: 'docs', sidebar: { open: true } },
     'How-to procedures organized by category.');
 
-  writeMd(join(SITE_CONTENT, 'sources', '_index.md'),
+  writeMd(join(PROJECT_CONTENT, 'sources', '_index.md'),
     { title: 'Source Documents', type: 'docs', sidebar: { open: true } },
     'Original documents from which topics were extracted.');
 }
@@ -108,50 +112,25 @@ function cleanGeneratedContent() {
 // ── Main ──
 
 console.log(`Exporting project ${projectId}...`);
-cleanGeneratedContent();
 
-// 1. Fetch categories
-const { categories } = await mcpCall('list_categories', {}, { projectId });
-console.log(`Found ${categories.length} categories`);
+// Fetch project name
+const { projects } = await mcpCall('list_projects');
+const project = projects.find(p => p.id === projectId);
+const projectName = project?.name || projectId;
 
-let topicCount = 0;
+cleanGeneratedContent(projectName);
 
-// 2. For each category, fetch topics and write markdown files
-for (const cat of categories) {
-  const categoryPath = cat.category;
-  const segments = categoryPath.split('/');
-  const categoryDir = join(SITE_CONTENT, 'topics', ...segments);
+// Update hugo.yaml with project-scoped menu
+const SITE_ROOT = join(__dirname, '..', 'site');
+const hugoYamlPath = join(SITE_ROOT, 'hugo.yaml');
+const pidLower = projectId.toLowerCase();
+let hugoYaml = readFileSync(hugoYamlPath, 'utf-8');
+hugoYaml = hugoYaml.replace(/\nmenu:[\s\S]*?(?=\n\w|\n*$)/, '');
+hugoYaml = hugoYaml.trimEnd() + `\n\nmenu:\n  main:\n    - name: Topics\n      pageRef: /${pidLower}/topics\n      weight: 1\n    - name: Sources\n      pageRef: /${pidLower}/sources\n      weight: 2\n`;
+writeFileSync(hugoYamlPath, hugoYaml);
 
-  // Create _index.md for each level of the category hierarchy
-  for (let i = 1; i <= segments.length; i++) {
-    const partialPath = segments.slice(0, i);
-    const indexPath = join(SITE_CONTENT, 'topics', ...partialPath, '_index.md');
-    const title = partialPath[partialPath.length - 1]
-      .replace(/-/g, ' ')
-      .replace(/\b\w/g, c => c.toUpperCase());
-    writeMd(indexPath, { title, type: 'docs', sidebar: { open: true } }, '');
-  }
-
-  const { topics } = await mcpCall('list_topics', { category: categoryPath }, { projectId });
-
-  for (const topic of topics) {
-    const slug = slugify(topic.title);
-    const filePath = join(categoryDir, `${slug}.md`);
-
-    const fm = {
-      title: topic.title,
-      type: 'docs',
-      doc_ids: topic.doc_ids || [],
-    };
-
-    writeMd(filePath, fm, topic.summary);
-    topicCount++;
-  }
-}
-
-console.log(`Exported ${topicCount} topics`);
-
-// 3. Fetch documents and write source pages
+// 1. Fetch and write source documents, building an ID-to-metadata map
+const docMap = new Map();
 let docCount = 0;
 try {
   const { documents } = await mcpCall('list_documents', {}, { projectId });
@@ -162,7 +141,6 @@ try {
     let contents = fullDoc.contents || '';
     let docTitle = doc.title;
 
-    // Extract title from leading markdown heading if no title field
     if (!docTitle) {
       const headingMatch = contents.match(/^#\s+(.+)/m);
       if (headingMatch) {
@@ -172,7 +150,9 @@ try {
     }
 
     const slug = slugify(docTitle || doc.id);
-    const filePath = join(SITE_CONTENT, 'sources', `${slug}.md`);
+    docMap.set(doc.id, { title: docTitle || doc.id, slug });
+
+    const filePath = join(PROJECT_CONTENT, 'sources', `${slug}.md`);
 
     const fm = {
       title: docTitle || doc.id,
@@ -195,4 +175,54 @@ try {
 }
 
 console.log(`Exported ${docCount} source documents`);
+
+// 2. Fetch categories and write topic pages with source links
+const { categories } = await mcpCall('list_categories', {}, { projectId });
+console.log(`Found ${categories.length} categories`);
+
+let topicCount = 0;
+
+for (const cat of categories) {
+  const categoryPath = cat.category;
+  const segments = categoryPath.split('/');
+  const categoryDir = join(PROJECT_CONTENT, 'topics', ...segments);
+
+  for (let i = 1; i <= segments.length; i++) {
+    const partialPath = segments.slice(0, i);
+    const indexPath = join(PROJECT_CONTENT, 'topics', ...partialPath, '_index.md');
+    const title = partialPath[partialPath.length - 1]
+      .replace(/-/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
+    writeMd(indexPath, { title, type: 'docs', sidebar: { open: true } }, '');
+  }
+
+  const { topics } = await mcpCall('list_topics', { category: categoryPath }, { projectId });
+
+  for (const topic of topics) {
+    const slug = slugify(topic.title);
+    const filePath = join(categoryDir, `${slug}.md`);
+
+    const fm = {
+      title: topic.title,
+      type: 'docs',
+    };
+
+    let body = topic.summary;
+
+    const docIds = topic.doc_ids || [];
+    const sourceLinks = docIds
+      .map(id => docMap.get(id))
+      .filter(Boolean)
+      .map(d => `- [${d.title}](/${pidLower}/sources/${d.slug}/)`);
+
+    if (sourceLinks.length > 0) {
+      body += `\n\n---\n\n**Sources:**\n\n${sourceLinks.join('\n')}`;
+    }
+
+    writeMd(filePath, fm, body);
+    topicCount++;
+  }
+}
+
+console.log(`Exported ${topicCount} topics`);
 console.log(`\nDone! Run 'cd site && hugo server' to preview.`);
