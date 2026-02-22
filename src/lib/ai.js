@@ -1,8 +1,10 @@
-import { generateObject } from 'ai';
+import { generateText, Output } from 'ai';
 import { bedrock } from '@ai-sdk/amazon-bedrock';
 import { z } from 'zod';
 
-const MODEL = bedrock('us.anthropic.claude-sonnet-4-5-20250929-v1:0');
+// const MODEL = bedrock('us.anthropic.claude-sonnet-4-5-20250929-v1:0');
+// const MODEL = bedrock('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+const MODEL = bedrock('us.anthropic.claude-sonnet-4-6');
 
 /**
  * Extract how-tos from document contents.
@@ -16,20 +18,22 @@ export async function extractHowTos(contents, url, categorizationRules = '') {
     ? `\n\nCATEGORIZATION RULES (you MUST follow these when assigning categories):\n${categorizationRules}\n`
     : '';
 
-  const { object } = await generateObject({
+  const { output } = await generateText({
     model: MODEL,
-    schema: z.object({
-      summary: z.object({
-        category: z.string().describe('A hierarchical category path using "/" to separate levels. Use lowercase kebab-case for each segment, 2-3 levels. Must follow the categorization rules if provided.'),
-        title: z.string().describe('A concise title for the overall how-to, e.g. "How to manage Khoros deployments" or "How to troubleshoot authentication failures". Start with "How to".'),
-        body: z.string().describe('A high-level summary (500-1000 chars) of what this document teaches you to do. Describe the overall purpose, when you would use these procedures, and what systems/tools are involved. This should help someone decide if this document is relevant to their problem.'),
+    output: Output.object({
+      schema: z.object({
+        summary: z.object({
+          category: z.string().describe('A hierarchical category path using "/" to separate levels. Use lowercase kebab-case for each segment, 2-3 levels. Must follow the categorization rules if provided.'),
+          title: z.string().describe('A concise title for the overall how-to, e.g. "How to manage Khoros deployments" or "How to troubleshoot authentication failures". Start with "How to".'),
+          body: z.string().describe('A high-level summary (500-1000 chars) of what this document teaches you to do. Describe the overall purpose, when you would use these procedures, and what systems/tools are involved. This should help someone decide if this document is relevant to their problem.'),
+        }),
+        howtos: z.array(z.object({
+          category: z.string().describe('A hierarchical category path using "/" to separate levels. Use lowercase kebab-case, 2-3 levels. Must follow the categorization rules if provided.'),
+          title: z.string().describe('A concise action-oriented title starting with "How to", e.g. "How to restart the Khoros application server", "How to rotate database credentials".'),
+          steps: z.string().describe('The step-by-step procedure (500-2000 chars). Use numbered steps. Include specific commands, paths, URLs, config values, and expected outputs. Should be actionable by someone following along.'),
+          notes: z.string().describe('Important warnings, prerequisites, gotchas, or context (0-500 chars). Empty string if none.'),
+        })),
       }),
-      howtos: z.array(z.object({
-        category: z.string().describe('A hierarchical category path using "/" to separate levels. Use lowercase kebab-case, 2-3 levels. Must follow the categorization rules if provided.'),
-        title: z.string().describe('A concise action-oriented title starting with "How to", e.g. "How to restart the Khoros application server", "How to rotate database credentials".'),
-        steps: z.string().describe('The step-by-step procedure (500-2000 chars). Use numbered steps. Include specific commands, paths, URLs, config values, and expected outputs. Should be actionable by someone following along.'),
-        notes: z.string().describe('Important warnings, prerequisites, gotchas, or context (0-500 chars). Empty string if none.'),
-      })),
     }),
     prompt: `Extract actionable how-to procedures from this document. A single document may describe how to do many different things — extract each as a separate how-to.
 
@@ -47,7 +51,7 @@ Document contents:
 ${contents}`,
   });
 
-  return object;
+  return output;
 }
 
 /**
@@ -67,14 +71,16 @@ export async function classifyHowToAction(newBody, newCategory, newTitle, simila
     ? `\nCategorization rules (follow these when assigning the category):\n${categorizationRules}\n`
     : '';
 
-  const { object } = await generateObject({
+  const { output } = await generateText({
     model: MODEL,
-    schema: z.object({
-      action: z.enum(['ADD', 'REPLACE']).describe('ADD = create a brand new entry. REPLACE = merge with existing entries, replacing them.'),
-      category: z.string().describe('The hierarchical category path using "/" to separate levels. Use lowercase kebab-case, 2-3 levels.'),
-      title: z.string().describe('A concise action-oriented title starting with "How to".'),
-      summary: z.string().describe('The merged how-to content (500-2000 chars). If REPLACE, combine the steps and details from all entries being replaced into one comprehensive procedure.'),
-      replaceIds: z.array(z.string()).describe('If REPLACE, the IDs of existing entries to replace. Empty array if ADD.'),
+    output: Output.object({
+      schema: z.object({
+        action: z.enum(['ADD', 'REPLACE']).describe('ADD = create a brand new entry. REPLACE = merge with existing entries, replacing them.'),
+        category: z.string().describe('The hierarchical category path using "/" to separate levels. Use lowercase kebab-case, 2-3 levels.'),
+        title: z.string().describe('A concise action-oriented title starting with "How to".'),
+        summary: z.string().describe('The merged how-to content (500-2000 chars). If REPLACE, combine the steps and details from all entries being replaced into one comprehensive procedure.'),
+        replaceIds: z.array(z.string()).describe('If REPLACE, the IDs of existing entries to replace. Empty array if ADD.'),
+      }),
     }),
     prompt: `You are organizing a knowledge base of how-to procedures.
 
@@ -94,5 +100,5 @@ Rules:
 - IMPORTANT: When merging, the new how-to represents more recent information. If facts conflict (e.g. different port numbers, URLs, versions, config values), the new how-to's information takes precedence over older entries.`,
   });
 
-  return object;
+  return output;
 }
