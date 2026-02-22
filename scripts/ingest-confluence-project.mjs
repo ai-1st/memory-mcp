@@ -27,6 +27,7 @@
  */
 
 import { readFileSync } from 'fs';
+import { htmlToText } from '../src/lib/html.js';
 
 // Parse CLI args: positional args vs flags/options
 const positional = [];
@@ -38,6 +39,8 @@ const cliOptions = {};
   for (let i = 0; i < raw.length; i++) {
     if (raw[i] === '--dry-run') {
       cliFlags.add('dry-run');
+    } else if (raw[i] === '--force') {
+      cliFlags.add('force');
     } else if (raw[i] === '--rules' && i + 1 < raw.length) {
       cliOptions.rules = raw[++i];
     } else if (raw[i] === '--rules-file' && i + 1 < raw.length) {
@@ -49,12 +52,13 @@ const cliOptions = {};
 }
 
 const dryRun = cliFlags.has('dry-run');
+const forceReprocess = cliFlags.has('force');
 const projectName = positional[0];
 const parentUrl = positional[1];
 
 if (!projectName || !parentUrl) {
   console.error('Usage: node scripts/ingest-confluence-project.mjs <project-name> <confluence-parent-url> [options]');
-  console.error('Options: --dry-run  --rules "text"  --rules-file path');
+  console.error('Options: --dry-run  --force  --rules "text"  --rules-file path');
   process.exit(1);
 }
 
@@ -164,26 +168,6 @@ async function mcpCall(name, args = {}, config = {}) {
   return text ? JSON.parse(text) : json.result;
 }
 
-function htmlToText(html) {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/h[1-6]>/gi, '\n\n')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<\/tr>/gi, '\n')
-    .replace(/<\/td>/gi, ' | ')
-    .replace(/<\/th>/gi, ' | ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
 function pageLink(pageId, title) {
   return `${baseUrl}/wiki/pages/${pageId}/${encodeURIComponent(title || '')}`;
 }
@@ -193,6 +177,7 @@ function pageLink(pageId, title) {
 let projectId;
 let success = 0;
 let skipped = 0;
+let unchanged = 0;
 let errors = 0;
 let count = 0;
 
@@ -212,10 +197,20 @@ async function ingestPage(title, url, bodyHtml) {
   try {
     const result = await mcpCall('add_doc', {
       url,
+      title,
       contents: `# ${title}\n\n${text}`,
+      force: forceReprocess,
     }, { projectId });
-    const n = result.howTosProcessed || result.topicsProcessed || 0;
-    console.log(`  -> ${n} how-tos extracted`);
+
+    if (result.skipped) {
+      console.log(`  -> Unchanged, skipped`);
+      unchanged++;
+      return;
+    }
+
+    const created = result.topicsCreated || 0;
+    const replaced = result.topicsReplaced || 0;
+    console.log(`  -> ${result.howTosProcessed} how-tos (${created} new, ${replaced} replaced)`);
     success++;
   } catch (err) {
     console.error(`  -> Error: ${err.message}`);
@@ -256,6 +251,7 @@ console.log(`Done!`);
 if (!dryRun) {
   console.log(`  Project:  ${projectName} (${projectId})`);
 }
-console.log(`  Ingested: ${success} pages`);
-console.log(`  Skipped:  ${skipped}`);
-console.log(`  Errors:   ${errors}`);
+console.log(`  Ingested:   ${success} pages`);
+console.log(`  Unchanged:  ${unchanged}`);
+console.log(`  Skipped:    ${skipped}`);
+console.log(`  Errors:     ${errors}`);

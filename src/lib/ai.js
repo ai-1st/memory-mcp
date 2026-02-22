@@ -90,7 +90,8 @@ Rules:
 - If the new how-to covers substantially the same procedure as one or more existing entries (similarity > 0.85), choose REPLACE and merge the information into a single improved how-to.
 - If the new how-to is a distinct procedure, choose ADD.
 - When replacing, include ALL entry IDs that are being superseded.
-- The merged content should combine steps and details from all sources into one comprehensive procedure.`,
+- The merged content should combine steps and details from all sources into one comprehensive procedure.
+- IMPORTANT: When merging, the new how-to represents more recent information. If facts conflict (e.g. different port numbers, URLs, versions, config values), the new how-to's information takes precedence over older entries.`,
   });
 
   return object;

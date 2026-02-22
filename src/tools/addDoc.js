@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { ulid } from 'ulid';
-import { putDoc, putTopic, getTopic, replaceTopic, incrementCategory, getProject } from '../lib/db.js';
+import { putDoc, updateDocStats, putTopic, getTopic, replaceTopic, incrementCategory, getProject, getLatestDocByUrl } from '../lib/db.js';
 import { generateEmbedding, putVector, deleteVector, findSimilarByEmbedding } from '../lib/embeddings.js';
 import { extractHowTos, classifyHowToAction } from '../lib/ai.js';
 
@@ -131,6 +131,14 @@ export const addDoc = {
         type: 'string',
         description: 'Full text contents of the document',
       },
+      title: {
+        type: 'string',
+        description: 'Title of the document / page',
+      },
+      force: {
+        type: 'boolean',
+        description: 'Force reprocessing even if content has not changed',
+      },
     },
     required: ['url', 'contents'],
   },
@@ -146,8 +154,32 @@ export const addDoc = {
   },
 
   async execute(args, config) {
-    const { url, contents } = args;
+    const { url, contents, title = '', force = false } = args;
     const { projectId } = config;
+
+    const contentsSha256 = sha256(contents);
+
+    // Check if this URL was already processed with identical content
+    if (!force) {
+      const existing = await getLatestDocByUrl(projectId, url);
+      if (existing && existing.contentsSha256 === contentsSha256) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              docId: existing.id,
+              url,
+              skipped: true,
+              reason: 'Content unchanged since last ingestion',
+              topicsCreated: existing.topicsCreated ?? 0,
+              topicsReplaced: existing.topicsReplaced ?? 0,
+            }, null, 2),
+          }],
+          isError: false,
+        };
+      }
+    }
+
     const docId = ulid();
 
     // 1. Fetch project for categorization rules
@@ -155,7 +187,7 @@ export const addDoc = {
     const rules = project?.rules || '';
 
     // 2. Store the document
-    await putDoc(projectId, { id: docId, url, contents });
+    await putDoc(projectId, { id: docId, url, title, contents, contentsSha256 });
 
     // 3. Extract how-tos via LLM (with project categorization rules)
     const { summary, howtos } = await extractHowTos(contents, url, rules);
@@ -174,12 +206,21 @@ export const addDoc = {
       entries.map(entry => processEntry(projectId, docId, entry, rules))
     );
 
+    const topicsCreated = results.filter(r => r.action === 'ADD').length;
+    const topicsReplaced = results.filter(r => r.action === 'REPLACE').length;
+
+    // 5. Update document record with processing stats
+    await updateDocStats(projectId, docId, topicsCreated, topicsReplaced);
+
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           docId,
           url,
+          skipped: false,
+          topicsCreated,
+          topicsReplaced,
           howTosProcessed: results.length,
           howtos: results,
         }, null, 2),

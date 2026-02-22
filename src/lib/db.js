@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
@@ -54,16 +55,32 @@ export async function listProjects() {
 // ── Docs ──
 
 export async function putDoc(projectId, doc) {
-  await ddb.send(new PutCommand({
+  const item = {
+    PK: `P#${projectId}#DOC`,
+    SK: `DOC#${doc.id}`,
+    id: doc.id,
+    url: doc.url,
+    title: doc.title || '',
+    contents: doc.contents,
+    contentsSha256: doc.contentsSha256 || '',
+    topicsCreated: doc.topicsCreated ?? 0,
+    topicsReplaced: doc.topicsReplaced ?? 0,
+    createdAt: new Date().toISOString(),
+  };
+  if (doc.url) {
+    const urlHash = crypto.createHash('sha256').update(doc.url).digest('hex');
+    item.GSI1PK = `P#${projectId}#DOCURL#${urlHash}`;
+    item.GSI1SK = `DOC#${doc.id}`;
+  }
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
+}
+
+export async function updateDocStats(projectId, docId, topicsCreated, topicsReplaced) {
+  await ddb.send(new UpdateCommand({
     TableName: TABLE,
-    Item: {
-      PK: `P#${projectId}#DOC`,
-      SK: `DOC#${doc.id}`,
-      id: doc.id,
-      url: doc.url,
-      contents: doc.contents,
-      createdAt: new Date().toISOString(),
-    },
+    Key: { PK: `P#${projectId}#DOC`, SK: `DOC#${docId}` },
+    UpdateExpression: 'SET topicsCreated = :c, topicsReplaced = :r',
+    ExpressionAttributeValues: { ':c': topicsCreated, ':r': topicsReplaced },
   }));
 }
 
@@ -73,6 +90,35 @@ export async function getDoc(projectId, id) {
     Key: { PK: `P#${projectId}#DOC`, SK: `DOC#${id}` },
   }));
   return Item || null;
+}
+
+export async function getLatestDocByUrl(projectId, url) {
+  const urlHash = crypto.createHash('sha256').update(url).digest('hex');
+  const { Items } = await ddb.send(new QueryCommand({
+    TableName: TABLE,
+    IndexName: 'GSI1',
+    KeyConditionExpression: 'GSI1PK = :pk',
+    ExpressionAttributeValues: { ':pk': `P#${projectId}#DOCURL#${urlHash}` },
+    ScanIndexForward: false,
+    Limit: 1,
+  }));
+  return Items && Items.length > 0 ? Items[0] : null;
+}
+
+export async function listDocs(projectId) {
+  const items = [];
+  let lastKey;
+  do {
+    const { Items, LastEvaluatedKey } = await ddb.send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: 'PK = :pk',
+      ExpressionAttributeValues: { ':pk': `P#${projectId}#DOC` },
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(Items || []));
+    lastKey = LastEvaluatedKey;
+  } while (lastKey);
+  return items;
 }
 
 // ── Topics ──

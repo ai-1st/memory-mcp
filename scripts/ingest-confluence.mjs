@@ -65,24 +65,9 @@ const page = await res.json();
 const title = page.title;
 const html = page.body.storage.value;
 
-// Strip HTML to plain text
-const text = html
-  .replace(/<br\s*\/?>/gi, '\n')
-  .replace(/<\/p>/gi, '\n\n')
-  .replace(/<\/h[1-6]>/gi, '\n\n')
-  .replace(/<\/li>/gi, '\n')
-  .replace(/<\/tr>/gi, '\n')
-  .replace(/<\/td>/gi, ' | ')
-  .replace(/<\/th>/gi, ' | ')
-  .replace(/<[^>]+>/g, '')
-  .replace(/&nbsp;/g, ' ')
-  .replace(/&amp;/g, '&')
-  .replace(/&lt;/g, '<')
-  .replace(/&gt;/g, '>')
-  .replace(/&quot;/g, '"')
-  .replace(/&#39;/g, "'")
-  .replace(/\n{3,}/g, '\n\n')
-  .trim();
+import { htmlToText } from '../src/lib/html.js';
+
+const text = htmlToText(html);
 
 console.log(`Title: ${title}`);
 console.log(`Content: ${text.length} chars`);

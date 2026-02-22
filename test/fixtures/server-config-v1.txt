@@ -1,0 +1,36 @@
+# Application Server Configuration Guide
+
+This document describes how to configure and manage the Acme application server.
+
+## Deployment
+
+The application server runs on port 8080. To start the server:
+
+1. SSH into the production host at prod-server-01.acme.internal
+2. Navigate to /opt/acme/app
+3. Run `./start.sh --port 8080`
+4. Verify the server is running: `curl http://localhost:8080/health`
+
+The health endpoint should return `{"status": "ok"}`.
+
+## Database Connection
+
+The server connects to the PostgreSQL database at db-primary.acme.internal:5432.
+Connection pool size is set to 20 by default.
+
+Configuration file: /etc/acme/database.yml
+
+```yaml
+host: db-primary.acme.internal
+port: 5432
+pool_size: 20
+database: acme_production
+```
+
+## Logging
+
+Logs are written to /var/log/acme/app.log. Log rotation is configured via logrotate with a 7-day retention period. Log level is set to INFO in production.
+
+## SSL/TLS
+
+The server uses a self-signed certificate located at /etc/acme/ssl/server.crt. Certificate renewal is manual and should be done every 12 months.

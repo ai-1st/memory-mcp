@@ -3,6 +3,7 @@ import { listCategories } from './listCategories.js';
 import { listTopics } from './listTopics.js';
 import { semanticSearch } from './semanticSearch.js';
 import { getDocument } from './getDocument.js';
+import { listDocuments } from './listDocuments.js';
 import { listProjects } from './listProjects.js';
 import { createProject } from './createProject.js';
 
@@ -15,6 +16,7 @@ export const tools = [
   listTopics,
   semanticSearch,
   getDocument,
+  listDocuments,
   listProjects,
   createProject,
 ];

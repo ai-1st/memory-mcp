@@ -45,7 +45,11 @@ export const getDocument = {
         text: JSON.stringify({
           id: doc.id,
           url: doc.url,
+          title: doc.title || '',
           contents: doc.contents,
+          contentsSha256: doc.contentsSha256 || '',
+          topicsCreated: doc.topicsCreated ?? 0,
+          topicsReplaced: doc.topicsReplaced ?? 0,
           createdAt: doc.createdAt,
         }, null, 2),
       }],

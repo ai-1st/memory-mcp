@@ -1,0 +1,34 @@
+baseURL: https://example.com/
+title: Memory MCP Knowledge Base
+languageCode: en-us
+
+module:
+  imports:
+    - path: github.com/imfing/hextra
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true
+  highlight:
+    noClasses: false
+
+menu:
+  main:
+    - name: Topics
+      pageRef: /topics
+      weight: 1
+    - name: Sources
+      pageRef: /sources
+      weight: 2
+
+params:
+  navbar:
+    displayTitle: true
+    displayLogo: false
+  footer:
+    displayPoweredBy: false
+  page:
+    width: wide
+  sidebar:
+    excludedPaths: []
