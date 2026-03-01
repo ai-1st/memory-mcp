@@ -1,5 +1,5 @@
 import { ulid } from 'ulid';
-import { listProjects, putProject } from '../../lib/db.js';
+import { listProjects, getProject, putProject } from '../../lib/db.js';
 
 export async function list() {
   const projects = await listProjects();
@@ -7,6 +7,13 @@ export async function list() {
     statusCode: 200,
     body: { projects: projects.map(p => ({ id: p.id, name: p.name, rules: p.rules, createdAt: p.createdAt })) },
   };
+}
+
+export async function get({ params }) {
+  const [projectId] = params;
+  const project = await getProject(projectId);
+  if (!project) return { statusCode: 404, body: { error: 'Project not found' } };
+  return { statusCode: 200, body: { id: project.id, name: project.name, rules: project.rules, createdAt: project.createdAt } };
 }
 
 export async function create({ body }) {

@@ -8,6 +8,7 @@ import * as siteRoutes from './routes/site.js';
 
 const routes = [
   { method: 'GET',  pattern: /^\/projects$/,                                          handler: projectRoutes.list },
+  { method: 'GET',  pattern: /^\/projects\/([^/]+)$/,                                 handler: projectRoutes.get },
   { method: 'POST', pattern: /^\/projects$/,                                          handler: projectRoutes.create },
   { method: 'GET',  pattern: /^\/projects\/([^/]+)\/categories$/,                     handler: categoryRoutes.list },
   { method: 'GET',  pattern: /^\/projects\/([^/]+)\/topics$/,                         handler: categoryRoutes.listTopics },
@@ -18,6 +19,7 @@ const routes = [
   { method: 'POST', pattern: /^\/projects\/([^/]+)\/scrape$/,                         handler: scrapeRoutes.enqueue },
   { method: 'GET',  pattern: /^\/projects\/([^/]+)\/queues$/,                         handler: queueRoutes.status },
   { method: 'POST', pattern: /^\/projects\/([^/]+)\/queues\/control$/,                handler: queueRoutes.control },
+  { method: 'POST', pattern: /^\/projects\/([^/]+)\/queues\/requeue$/,               handler: queueRoutes.requeue },
   { method: 'POST', pattern: /^\/site\/rebuild$/,                                     handler: siteRoutes.rebuild },
   { method: 'GET',  pattern: /^\/site\/rebuild\/([^/]+)$/,                             handler: siteRoutes.status },
   { method: 'GET',  pattern: /^\/site\/info$/,                                         handler: siteRoutes.info },

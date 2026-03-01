@@ -1,10 +1,10 @@
-import { SQSClient, PurgeQueueCommand } from '@aws-sdk/client-sqs';
+import { SQSClient, PurgeQueueCommand, SendMessageCommand } from '@aws-sdk/client-sqs';
 import {
   LambdaClient,
   ListEventSourceMappingsCommand,
   UpdateEventSourceMappingCommand,
 } from '@aws-sdk/client-lambda';
-import { getQueueCounts, listScrapeJobs, listProcessJobs, clearJobs } from '../../lib/queue.js';
+import { getQueueCounts, listScrapeJobs, listProcessJobs, clearJobs, updateProcessJob } from '../../lib/queue.js';
 
 const sqs = new SQSClient({});
 const lambda = new LambdaClient({});
@@ -46,7 +46,7 @@ export async function status({ params, query }) {
       process: {
         ...counts.process,
         jobs: processJobs.map(j => ({
-          id: j.id, url: j.url, title: j.title, status: j.status,
+          id: j.id, docId: j.docId, url: j.url, title: j.title, status: j.status,
           topicsCreated: j.topicsCreated, topicsReplaced: j.topicsReplaced,
           error: j.error, createdAt: j.createdAt, updatedAt: j.updatedAt,
         })),
@@ -109,4 +109,29 @@ export async function control({ params, body }) {
     ]);
     return { statusCode: 200, body: { queue, action: 'cleared' } };
   }
+}
+
+export async function requeue({ params, body }) {
+  const [projectId] = params;
+  const { jobIds } = body;
+
+  if (!Array.isArray(jobIds) || jobIds.length === 0) {
+    return { statusCode: 400, body: { error: 'jobIds array is required' } };
+  }
+
+  const results = [];
+  for (const jobId of jobIds) {
+    try {
+      await updateProcessJob(projectId, jobId, { status: 'pending' });
+      await sqs.send(new SendMessageCommand({
+        QueueUrl: PROCESS_QUEUE_URL,
+        MessageBody: JSON.stringify({ projectId, jobId }),
+      }));
+      results.push({ jobId, status: 'requeued' });
+    } catch (err) {
+      results.push({ jobId, status: 'error', error: err.message });
+    }
+  }
+
+  return { statusCode: 200, body: { requeued: results.filter(r => r.status === 'requeued').length, results } };
 }
