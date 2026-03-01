@@ -55,7 +55,7 @@ async function mcpCall(name, args = {}, config = {}) {
 }
 
 function slugify(text) {
-  return text
+  return (text || 'untitled')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
@@ -63,13 +63,17 @@ function slugify(text) {
 }
 
 function escapeFrontmatter(str) {
-  if (/[:"'\n]/.test(str)) return JSON.stringify(str);
+  if (!str || str === 'true' || str === 'false' || /^\d+$/.test(str)) return str;
+  if (/[:"'\n\r{}[\]#&*!|>%@`?,]/.test(str) || str.startsWith('-') || str.startsWith(' ')) {
+    return JSON.stringify(str);
+  }
   return str;
 }
 
 function formatYaml(obj, indent = 0) {
   const pad = '  '.repeat(indent);
   return Object.entries(obj)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => {
       if (v && typeof v === 'object' && !Array.isArray(v)) {
         return `${pad}${k}:\n${formatYaml(v, indent + 1)}`;

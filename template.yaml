@@ -110,6 +110,7 @@ Resources:
           ECS_SECURITY_GROUP: !Ref HugoTaskSecurityGroup
           ECS_CONTAINER_NAME: hugo-builder
           SITE_DISTRO_URL: !Sub 'https://${SiteDistribution.DomainName}'
+          MCP_SERVER_URL: !GetAtt McpServerFunctionUrl.FunctionUrl
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MemoryMcpTable
@@ -293,6 +294,26 @@ Resources:
         SigningBehavior: always
         SigningProtocol: sigv4
 
+  SiteIndexRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-index-rewrite'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Append index.html to directory requests
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          if (uri.endsWith('/')) {
+            request.uri += 'index.html';
+          } else if (!uri.includes('.')) {
+            request.uri += '/index.html';
+          }
+          return request;
+        }
+
   SiteDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -310,6 +331,9 @@ Resources:
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
           Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SiteIndexRewriteFunction.FunctionARN
         CustomErrorResponses:
           - ErrorCode: 403
             ResponseCode: 404

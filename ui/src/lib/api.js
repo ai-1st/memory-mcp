@@ -42,7 +42,13 @@ export const api = {
   getDocument: (projectId, docId) => request('GET', `/projects/${projectId}/documents/${docId}`),
   addDocument: (projectId, data) => request('POST', `/projects/${projectId}/documents`, data),
   enqueueScrape: (projectId, data) => request('POST', `/projects/${projectId}/scrape`, data),
-  queueStatus: (projectId) => request('GET', `/projects/${projectId}/queues`),
+  queueStatus: (projectId, { processStatus, scrapeStatus } = {}) => {
+    const params = new URLSearchParams();
+    if (processStatus) params.set('processStatus', processStatus);
+    if (scrapeStatus) params.set('scrapeStatus', scrapeStatus);
+    const qs = params.toString();
+    return request('GET', `/projects/${projectId}/queues${qs ? '?' + qs : ''}`);
+  },
   queueControl: (projectId, data) => request('POST', `/projects/${projectId}/queues/control`, data),
   rebuildSite: () => request('POST', '/site/rebuild'),
   rebuildStatus: (taskId) => request('GET', `/site/rebuild/${taskId}`),

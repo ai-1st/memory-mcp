@@ -14,21 +14,30 @@ const PROCESS_QUEUE_URL = process.env.PROCESS_QUEUE_URL;
 const SCRAPE_WORKER_FN = process.env.SCRAPE_WORKER_FN;
 const PROCESS_WORKER_FN = process.env.PROCESS_WORKER_FN;
 
-export async function status({ params }) {
+export async function status({ params, query }) {
   const [projectId] = params;
+  const rawProcessStatus = query.processStatus || null;
+  const processStatusFilter = rawProcessStatus === 'none' ? '__skip__' : rawProcessStatus;
+  const rawScrapeStatus = query.scrapeStatus || null;
+  const scrapeStatusFilter = rawScrapeStatus === 'none' ? null : rawScrapeStatus;
 
+  const skipProcessJobs = processStatusFilter === '__skip__';
   const [counts, scrapeJobs, processJobs] = await Promise.all([
     getQueueCounts(projectId),
     listScrapeJobs(projectId),
-    listProcessJobs(projectId, { limit: 50 }),
+    skipProcessJobs ? [] : listProcessJobs(projectId, { status: processStatusFilter }),
   ]);
+
+  const filteredScrapeJobs = scrapeStatusFilter
+    ? scrapeJobs.filter(j => j.status === scrapeStatusFilter)
+    : scrapeJobs;
 
   return {
     statusCode: 200,
     body: {
       scrape: {
         ...counts.scrape,
-        jobs: scrapeJobs.map(j => ({
+        jobs: filteredScrapeJobs.map(j => ({
           id: j.id, source: j.source, status: j.status,
           docsFound: j.docsFound, docsEnqueued: j.docsEnqueued,
           error: j.error, createdAt: j.createdAt, updatedAt: j.updatedAt,

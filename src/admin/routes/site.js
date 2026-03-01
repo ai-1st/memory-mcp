@@ -9,6 +9,7 @@ const {
   ECS_SECURITY_GROUP,
   ECS_CONTAINER_NAME,
   SITE_DISTRO_URL,
+  MCP_SERVER_URL,
 } = process.env;
 
 export async function rebuild() {
@@ -33,6 +34,9 @@ export async function rebuild() {
     overrides: {
       containerOverrides: [{
         name: ECS_CONTAINER_NAME || 'hugo-builder',
+        environment: [
+          { name: 'MCP_URL', value: MCP_SERVER_URL || '' },
+        ],
       }],
     },
   }));

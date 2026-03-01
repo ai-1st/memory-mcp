@@ -50,6 +50,9 @@ body {
 
 .view-section {
   animation: fadeIn 0.15s ease-out;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 64px);
 }
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
@@ -732,19 +735,17 @@ body {
   border-radius: var(--radius-sm);
 }
 
-/* ── Queue Dashboard ── */
-.queue-panels {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  margin-top: 16px;
-}
-
+/* ── Queue Pages ── */
 .queue-panel {
+  margin-top: 16px;
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 20px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .queue-panel h2 {
@@ -776,10 +777,21 @@ body {
   white-space: nowrap;
 }
 
+.stat-item {
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: border-color 0.15s, opacity 0.15s;
+}
+.stat-item:hover { opacity: 0.8; }
+.stat-active-filter { border-color: currentColor; }
+
+.stat-all { background: var(--bg-3); color: var(--text-0); }
 .stat-pending { background: var(--bg-3); color: var(--text-1); }
 .stat-active { background: var(--accent-dim); color: var(--accent); }
 .stat-completed { background: var(--green-dim); color: var(--green); }
 .stat-failed { background: rgba(248, 113, 113, 0.12); color: var(--red); }
+
+.filter-label { font-weight: 400; color: var(--text-2); font-size: 13px; }
 
 .queue-controls {
   display: flex;
@@ -840,10 +852,14 @@ body {
 
 .queue-jobs {
   margin-top: 16px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .job-list {
-  max-height: 360px;
+  flex: 1;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -873,6 +889,12 @@ body {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+  text-decoration: none;
+}
+
+a.job-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .job-count {
@@ -962,5 +984,4 @@ body {
   .nav-item { justify-content: center; padding: 12px; }
   .nav-icon { width: auto; font-size: 20px; }
   .main-content { padding: 20px 16px; }
-  .queue-panels { grid-template-columns: 1fr; }
 }

@@ -130,8 +130,11 @@ export default function Sidebar() {
         <NavLink to="/add" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
           <span className="nav-icon">&#43;</span> Add Document
         </NavLink>
-        <NavLink to="/queues" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
-          <span className="nav-icon">&#9776;</span> Queues
+        <NavLink to="/scrape" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+          <span className="nav-icon">&#8631;</span> Scrape Queue
+        </NavLink>
+        <NavLink to="/process" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+          <span className="nav-icon">&#9881;</span> Process Queue
         </NavLink>
       </nav>
 
@@ -168,9 +171,9 @@ export default function Sidebar() {
             </div>
           )}
 
-          {siteUrl && (
+          {siteUrl && projectId && (
             <a
-              href={siteUrl}
+              href={`${siteUrl.replace(/\/+$/, '')}/${projectId.toLowerCase()}/`}
               target="_blank"
               rel="noopener noreferrer"
               className="site-link"

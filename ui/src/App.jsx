@@ -6,7 +6,8 @@ import Search from './pages/Search';
 import AddDocument from './pages/AddDocument';
 import Document from './pages/Document';
 import Projects from './pages/Projects';
-import Queues from './pages/Queues';
+import ScrapeQueue from './pages/ScrapeQueue';
+import ProcessQueue from './pages/ProcessQueue';
 
 export default function App() {
   return (
@@ -19,7 +20,8 @@ export default function App() {
         <Route path="add" element={<AddDocument />} />
         <Route path="document/:docId" element={<Document />} />
         <Route path="projects" element={<Projects />} />
-        <Route path="queues" element={<Queues />} />
+        <Route path="scrape" element={<ScrapeQueue />} />
+        <Route path="process" element={<ProcessQueue />} />
       </Route>
     </Routes>
   );
