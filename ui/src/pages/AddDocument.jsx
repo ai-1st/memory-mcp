@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { callTool } from '../lib/mcp';
+import { api } from '../lib/api';
 import { useApp } from '../lib/store';
 import TopicList from '../components/TopicList';
 
@@ -17,7 +17,7 @@ export default function AddDocument() {
     setSubmitting(true);
     setResult(null);
     try {
-      const data = await callTool('add_doc', { url: url.trim(), contents: contents.trim() }, { projectId });
+      const data = await api.addDocument(projectId, { url: url.trim(), contents: contents.trim() });
       const count = data.howTosProcessed || data.topicsProcessed || 0;
       const items = (data.howtos || data.topics || []).map(t => ({
         ...t,

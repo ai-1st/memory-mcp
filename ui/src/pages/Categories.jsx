@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { callTool } from '../lib/mcp';
+import { api } from '../lib/api';
 import { useApp } from '../lib/store';
 import CategoryTree from '../components/CategoryTree';
 
@@ -14,7 +14,7 @@ export default function Categories() {
     async function load() {
       setLoading(true);
       try {
-        const data = await callTool('list_categories', {}, { projectId });
+        const data = await api.listCategories(projectId);
         if (!cancelled) setCategories(data.categories || []);
       } catch (err) {
         if (!cancelled) showToast(err.message);

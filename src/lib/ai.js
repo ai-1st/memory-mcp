@@ -42,6 +42,11 @@ For each how-to:
 - Steps should be numbered and specific enough to follow
 - Include exact commands, file paths, URLs, config keys, and expected outputs
 - Include prerequisites or warnings in notes
+- Each how-to should cover exactly ONE procedure. Do not combine multiple distinct actions (e.g. deploy AND rollback) into a single how-to.
+
+Do NOT extract:
+- Generic procedures someone could find in public documentation (e.g. "How to SSH into a server", "How to run a SQL query", "How to create a Git branch"). Only extract procedures containing organization-specific details: internal hostnames, product-specific commands, proprietary config values, or internal tooling.
+- If the document describes the same procedure repeated for multiple services/components using a template pattern, extract ONE generalized how-to describing the pattern (with placeholders for the service name), not separate how-tos per service.
 
 Also produce a high-level summary how-to that captures the overall purpose of the document — this helps match generic searches like "how do I deal with X" to the right document.
 ${rulesBlock}
@@ -49,6 +54,62 @@ Source URL: ${url}
 
 Document contents:
 ${contents}`,
+  });
+
+  return output;
+}
+
+/**
+ * LLM-as-judge: evaluate extracted how-tos against their source document.
+ * Returns scores (1-5) and specific findings for completeness, specificity, and search fitness.
+ */
+export async function judgeDocument(sourceContents, topics) {
+  const topicList = topics
+    .map((t, i) => `[${i}] title: "${t.title}"\n    category: "${t.category}"\n    body: "${t.summary}"`)
+    .join('\n\n');
+
+  const { output } = await generateText({
+    model: MODEL,
+    output: Output.object({
+      schema: z.object({
+        completeness: z.object({
+          score: z.number().describe('1-5 score. 5 = all actionable procedures captured, 1 = most missed.'),
+          missing: z.array(z.string()).describe('Actionable procedures present in the source but NOT covered by any extracted how-to. Empty if none.'),
+        }),
+        specificity: z.object({
+          score: z.number().describe('1-5 score. 5 = all topics contain org-specific knowledge, 1 = mostly generic.'),
+          generic: z.array(z.object({
+            index: z.number().describe('Index of the generic topic in the list above.'),
+            reason: z.string().describe('Why this topic is generic (e.g. "standard Linux commands with no org-specific context").'),
+          })).describe('Topics that contain only generic knowledge available in public docs. Empty if none.'),
+        }),
+        searchFitness: z.object({
+          score: z.number().describe('1-5 score. 5 = each topic is well-scoped for search, 1 = topics are too broad or vague.'),
+          issues: z.array(z.object({
+            index: z.number().describe('Index of the problematic topic.'),
+            reason: z.string().describe('Why this topic is poorly scoped (e.g. "mixes deployment and rollback into one topic" or "title too vague to match a specific query").'),
+          })).describe('Topics with search-fitness problems. Empty if none.'),
+        }),
+      }),
+    }),
+    prompt: `You are evaluating the quality of how-to extraction from a source document. Below is the original document and the how-tos that were extracted from it.
+
+Evaluate three dimensions:
+
+1. COMPLETENESS: Are all actionable procedures from the source document captured in the how-tos? List any specific procedures that were missed. Do NOT count general context or background information as missing — only concrete, step-by-step procedures.
+
+2. SPECIFICITY: Flag any how-to that contains only generic knowledge (standard Linux commands, general SQL syntax, common tool usage) without organization-specific context (hostnames, internal paths, config values, product-specific details). These are low-value entries that someone could find in public documentation.
+
+3. SEARCH FITNESS: Each how-to will be stored as a separate chunk for vector similarity search. Evaluate whether each topic is well-scoped:
+   - Too broad: mixes multiple distinct procedures that someone might search for independently
+   - Too vague: title or body doesn't contain specific enough terms to match a targeted query
+   - Good: covers exactly one procedure with specific, searchable terms in the title and body
+
+SOURCE DOCUMENT:
+${sourceContents}
+
+EXTRACTED HOW-TOS:
+${topicList}`,
   });
 
   return output;
@@ -93,7 +154,7 @@ Here are the most similar existing entries in the knowledge base:
 ${similarContext}
 ${rulesBlock}
 Rules:
-- If the new how-to covers substantially the same procedure as one or more existing entries (similarity > 0.85), choose REPLACE and merge the information into a single improved how-to.
+- If the new how-to covers substantially the same procedure as one or more existing entries (similarity > 0.75), choose REPLACE and merge the information into a single improved how-to.
 - If the new how-to is a distinct procedure, choose ADD.
 - When replacing, include ALL entry IDs that are being superseded.
 - The merged content should combine steps and details from all sources into one comprehensive procedure.

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { callTool } from '../lib/mcp';
+import { api } from '../lib/api';
 import { useApp } from '../lib/store';
 import Markdown from '../components/Markdown';
 
@@ -17,7 +17,7 @@ export default function Document() {
     async function load() {
       setLoading(true);
       try {
-        const data = await callTool('get_document', { id: docId }, { projectId });
+        const data = await api.getDocument(projectId, docId);
         if (!cancelled) setDoc(data);
       } catch (err) {
         if (!cancelled) showToast(err.message);

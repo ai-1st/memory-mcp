@@ -2,6 +2,14 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Memory MCP Server
 
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for Fargate tasks
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets for Fargate tasks (need internet access)
+
 Globals:
   Function:
     Timeout: 300
@@ -11,6 +19,8 @@ Globals:
       - arm64
 
 Resources:
+  # ─── Existing resources ───────────────────────────────────────────────
+
   MemoryMcpTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -77,10 +87,384 @@ Resources:
             - Authorization
           MaxAge: 300
 
+  # ─── Admin REST API ─────────────────────────────────────────────────
+
+  AdminApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: admin/index.handler
+      CodeUri: src/
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MemoryMcpTable
+          VECTOR_BUCKET: !Ref VectorBucket
+          SCRAPE_QUEUE_URL: !Ref ScrapeQueue
+          PROCESS_QUEUE_URL: !Ref ProcessQueue
+          SCRAPE_WORKER_FN: !Ref ScrapeWorkerFunction
+          PROCESS_WORKER_FN: !Ref ProcessWorkerFunction
+          ECS_CLUSTER: !Ref HugoCluster
+          ECS_TASK_DEF: !Ref HugoTaskDefinition
+          ECS_SUBNETS: !Join [',', !Ref SubnetIds]
+          ECS_SECURITY_GROUP: !Ref HugoTaskSecurityGroup
+          ECS_CONTAINER_NAME: hugo-builder
+          SITE_DISTRO_URL: !Sub 'https://${SiteDistribution.DomainName}'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MemoryMcpTable
+        - S3CrudPolicy:
+            BucketName: !Ref VectorBucket
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ScrapeQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ProcessQueue.QueueName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - ecs:RunTask
+                - ecs:DescribeTasks
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource:
+                - !GetAtt HugoTaskExecutionRole.Arn
+                - !GetAtt HugoTaskRole.Arn
+            - Effect: Allow
+              Action:
+                - sqs:PurgeQueue
+              Resource:
+                - !GetAtt ScrapeQueue.Arn
+                - !GetAtt ProcessQueue.Arn
+            - Effect: Allow
+              Action:
+                - lambda:ListEventSourceMappings
+                - lambda:GetEventSourceMapping
+                - lambda:UpdateEventSourceMapping
+              Resource: '*'
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - '*'
+          AllowMethods:
+            - GET
+            - POST
+            - PUT
+            - DELETE
+          AllowHeaders:
+            - Content-Type
+            - Authorization
+          MaxAge: 300
+
+  # ─── SQS Queues ─────────────────────────────────────────────────────
+
+  ScrapeQueueDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-scrape-dlq'
+      MessageRetentionPeriod: 1209600
+
+  ScrapeQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-scrape'
+      VisibilityTimeout: 900
+      MessageRetentionPeriod: 86400
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ScrapeQueueDLQ.Arn
+        maxReceiveCount: 3
+
+  ProcessQueueDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-process-dlq'
+      MessageRetentionPeriod: 1209600
+
+  ProcessQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-process'
+      VisibilityTimeout: 600
+      MessageRetentionPeriod: 86400
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ProcessQueueDLQ.Arn
+        maxReceiveCount: 3
+
+  # ─── Worker Lambdas ─────────────────────────────────────────────────
+
+  ScrapeWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: workers/scrapeWorker.handler
+      CodeUri: src/
+      Timeout: 900
+      MemorySize: 512
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MemoryMcpTable
+          VECTOR_BUCKET: !Ref VectorBucket
+          PROCESS_QUEUE_URL: !Ref ProcessQueue
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MemoryMcpTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ProcessQueue.QueueName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: '*'
+      Events:
+        ScrapeQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ScrapeQueue.Arn
+            BatchSize: 1
+            ScalingConfig:
+              MaximumConcurrency: 2
+
+  ProcessWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: workers/processWorker.handler
+      CodeUri: src/
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MemoryMcpTable
+          VECTOR_BUCKET: !Ref VectorBucket
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MemoryMcpTable
+        - S3CrudPolicy:
+            BucketName: !Ref VectorBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: '*'
+      Events:
+        ProcessQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ProcessQueue.Arn
+            BatchSize: 1
+            ScalingConfig:
+              MaximumConcurrency: 5
+
+  # ─── Hugo site S3 bucket ──────────────────────────────────────────────
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-site-${AWS::AccountId}'
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${SiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}'
+
+  # ─── CloudFront distribution ──────────────────────────────────────────
+
+  SiteOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-site-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SiteDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !Ref SiteOriginAccessControl
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: /404.html
+            ErrorCachingMinTTL: 60
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+
+  # ─── ECR repository ──────────────────────────────────────────────────
+
+  HugoBuilderRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${AWS::StackName}-hugo-builder'
+      ImageScanningConfiguration:
+        ScanOnPush: false
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep last 3 images",
+              "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 3
+              },
+              "action": { "type": "expire" }
+            }]
+          }
+
+  # ─── ECS Fargate cluster + task ───────────────────────────────────────
+
+  HugoCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${AWS::StackName}-hugo'
+      CapacityProviders:
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+
+  HugoTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound-only for Hugo builder Fargate tasks
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+
+  HugoTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ECRPull
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  HugoTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: HugoBuilderPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !GetAtt SiteBucket.Arn
+                  - !Sub '${SiteBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                Resource: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}'
+
+  HugoTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}-hugo-builder'
+      RetentionInDays: 14
+
+  HugoTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-hugo-builder'
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt HugoTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt HugoTaskRole.Arn
+      ContainerDefinitions:
+        - Name: hugo-builder
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${HugoBuilderRepo}:latest'
+          Essential: true
+          Environment:
+            - Name: SITE_BUCKET
+              Value: !Ref SiteBucket
+            - Name: CF_DISTRO_ID
+              Value: !Ref SiteDistribution
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref HugoTaskLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: hugo
+
 Outputs:
   McpServerUrl:
-    Description: Lambda Function URL for MCP Server
+    Description: Lambda Function URL for MCP Server (read-only, for agents)
     Value: !GetAtt McpServerFunctionUrl.FunctionUrl
+  AdminApiUrl:
+    Description: Lambda Function URL for Admin REST API (for UI)
+    Value: !GetAtt AdminApiFunctionUrl.FunctionUrl
   McpServerFunction:
     Description: MCP Server Lambda Function ARN
     Value: !GetAtt McpServerFunction.Arn
@@ -90,3 +474,15 @@ Outputs:
   VectorBucket:
     Description: S3 Vector Bucket Name
     Value: !Ref VectorBucket
+  SiteBucket:
+    Description: Hugo site S3 bucket
+    Value: !Ref SiteBucket
+  SiteUrl:
+    Description: CloudFront URL for the Hugo site
+    Value: !Sub 'https://${SiteDistribution.DomainName}'
+  SiteDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref SiteDistribution
+  HugoBuilderRepo:
+    Description: ECR repository for Hugo builder image
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${HugoBuilderRepo}'

@@ -6,6 +6,7 @@ import Search from './pages/Search';
 import AddDocument from './pages/AddDocument';
 import Document from './pages/Document';
 import Projects from './pages/Projects';
+import Queues from './pages/Queues';
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="add" element={<AddDocument />} />
         <Route path="document/:docId" element={<Document />} />
         <Route path="projects" element={<Projects />} />
+        <Route path="queues" element={<Queues />} />
       </Route>
     </Routes>
   );

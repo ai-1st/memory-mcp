@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { callTool } from '../lib/mcp';
+import { api } from '../lib/api';
 import { useApp } from '../lib/store';
 import TopicList from '../components/TopicList';
 
@@ -14,7 +14,7 @@ export default function Search() {
 
     setLoading(true);
     try {
-      const data = await callTool('semantic_search', { query: q, limit: 10 }, { projectId });
+      const data = await api.search(projectId, q, 10);
       setResults(data.results || []);
     } catch (err) {
       showToast(err.message);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { callTool, getEndpoint } from '../lib/mcp';
+import { api } from '../lib/api';
+import { getEndpoint } from '../lib/mcp';
 import { useApp } from '../lib/store';
 
 export default function Projects() {
@@ -12,7 +13,7 @@ export default function Projects() {
   async function loadList() {
     setLoading(true);
     try {
-      const data = await callTool('list_projects');
+      const data = await api.listProjects();
       setProjects(data.projects || []);
     } catch (err) {
       showToast(err.message);
@@ -27,7 +28,7 @@ export default function Projects() {
 
     setLoading(true);
     try {
-      const data = await callTool('create_project', { name });
+      const data = await api.createProject({ name });
       setProject(data.id, data.name);
       setNewName('');
       showToast(`Project "${name}" created`, 'success');

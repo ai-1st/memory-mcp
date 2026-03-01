@@ -1,24 +1,21 @@
-import { addDoc } from './addDoc.js';
 import { listCategories } from './listCategories.js';
 import { listTopics } from './listTopics.js';
 import { semanticSearch } from './semanticSearch.js';
 import { getDocument } from './getDocument.js';
 import { listDocuments } from './listDocuments.js';
 import { listProjects } from './listProjects.js';
-import { createProject } from './createProject.js';
 
 /**
- * Registry of all available tools
+ * Registry of read-only MCP tools (agent-facing).
+ * Write operations are handled by the Admin REST API.
  */
 export const tools = [
-  addDoc,
   listCategories,
   listTopics,
   semanticSearch,
   getDocument,
   listDocuments,
   listProjects,
-  createProject,
 ];
 
 /**

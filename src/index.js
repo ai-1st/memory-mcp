@@ -1,5 +1,6 @@
 import { route } from './mcp/router.js';
 import { validateRequest, parseRequestBody, createErrorResponse } from './mcp/utils.js';
+import { setSelfUrl } from './lib/selfUrl.js';
 
 /**
  * Lambda handler for MCP server
@@ -11,8 +12,9 @@ import { validateRequest, parseRequestBody, createErrorResponse } from './mcp/ut
  * Query parameters are merged into params.config, with payload config taking precedence.
  */
 export const handler = async (event) => {
-  // Note: CORS is handled by Lambda Function URL configuration in template.yaml
-  // No need to manually add CORS headers here
+  // Capture own Function URL from the incoming request for use by tools
+  const domain = event.requestContext?.domainName;
+  if (domain) setSelfUrl(`https://${domain}/`);
 
   // Extract query string parameters (fallback config source)
   const queryConfig = event.queryStringParameters || {};

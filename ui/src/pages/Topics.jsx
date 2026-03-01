@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { callTool } from '../lib/mcp';
+import { api } from '../lib/api';
 import { useApp } from '../lib/store';
 import TopicList from '../components/TopicList';
 
@@ -18,7 +18,7 @@ export default function Topics() {
     async function load() {
       setLoading(true);
       try {
-        const data = await callTool('list_topics', { category: decoded }, { projectId });
+        const data = await api.listTopics(projectId, decoded);
         if (!cancelled) setTopics(data.topics || []);
       } catch (err) {
         if (!cancelled) showToast(err.message);
