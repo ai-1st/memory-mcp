@@ -32,25 +32,41 @@ async function request(method, path, body) {
 
 export const api = {
   listProjects: () => request('GET', '/projects'),
+  getProject: (projectId) => request('GET', `/projects/${projectId}`),
   createProject: (data) => request('POST', '/projects', data),
-  listCategories: (projectId) => request('GET', `/projects/${projectId}/categories`),
-  listTopics: (projectId, category) =>
-    request('GET', `/projects/${projectId}/topics?category=${encodeURIComponent(category)}`),
-  search: (projectId, query, limit = 5) =>
+  updateProject: (projectId, data) => request('PUT', `/projects/${projectId}`, data),
+  deleteProject: (projectId) => request('DELETE', `/projects/${projectId}`),
+  search: (projectId, query, limit = 100) =>
     request('GET', `/projects/${projectId}/search?q=${encodeURIComponent(query)}&limit=${limit}`),
-  listDocuments: (projectId) => request('GET', `/projects/${projectId}/documents`),
+  listDocuments: (projectId, { limit, after } = {}) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', String(limit));
+    if (after) params.set('after', after);
+    const qs = params.toString();
+    return request('GET', `/projects/${projectId}/documents${qs ? '?' + qs : ''}`);
+  },
   getDocument: (projectId, docId) => request('GET', `/projects/${projectId}/documents/${docId}`),
   addDocument: (projectId, data) => request('POST', `/projects/${projectId}/documents`, data),
+  reprocessDocument: (projectId, docId) => request('POST', `/projects/${projectId}/documents/${docId}/reprocess`),
+  listChunks: (projectId, { docId, limit, after } = {}) => {
+    const params = new URLSearchParams();
+    if (docId) params.set('docId', docId);
+    if (limit) params.set('limit', String(limit));
+    if (after) params.set('after', after);
+    const qs = params.toString();
+    return request('GET', `/projects/${projectId}/chunks${qs ? '?' + qs : ''}`);
+  },
   enqueueScrape: (projectId, data) => request('POST', `/projects/${projectId}/scrape`, data),
-  queueStatus: (projectId, { processStatus, scrapeStatus } = {}) => {
+  queueStatus: (projectId, { processStatus, scrapeStatus, limit, after } = {}) => {
     const params = new URLSearchParams();
     if (processStatus) params.set('processStatus', processStatus);
     if (scrapeStatus) params.set('scrapeStatus', scrapeStatus);
+    if (limit) params.set('limit', String(limit));
+    if (after) params.set('after', after);
     const qs = params.toString();
     return request('GET', `/projects/${projectId}/queues${qs ? '?' + qs : ''}`);
   },
   queueControl: (projectId, data) => request('POST', `/projects/${projectId}/queues/control`, data),
-  rebuildSite: () => request('POST', '/site/rebuild'),
-  rebuildStatus: (taskId) => request('GET', `/site/rebuild/${taskId}`),
-  siteInfo: () => request('GET', '/site/info'),
+  queueRequeue: (projectId, data) => request('POST', `/projects/${projectId}/queues/requeue`, data),
+  rerunScrape: (projectId, jobId) => request('POST', `/projects/${projectId}/scrape/${jobId}/rerun`),
 };

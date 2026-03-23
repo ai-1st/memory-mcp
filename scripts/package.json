@@ -1,10 +1,10 @@
 {
-  "name": "memory-mcp-rebuild",
+  "name": "memory-mcp-scripts",
   "private": true,
   "type": "module",
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3",
     "@aws-sdk/client-s3": "^3",
-    "@aws-sdk/client-cloudfront": "^3",
-    "mime-types": "^2"
+    "@aws-sdk/lib-dynamodb": "^3"
   }
 }

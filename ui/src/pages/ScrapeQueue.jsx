@@ -33,7 +33,6 @@ export default function ScrapeQueue() {
   const [token, setToken] = useState(() => loadCred('jiraToken'));
   const [baseUrl, setBaseUrl] = useState(() => loadCred('jiraBaseUrl'));
   const [submitting, setSubmitting] = useState(false);
-  const [concurrency, setConcurrency] = useState(2);
   const [filter, setFilter] = useState(null);
 
   const qpApplied = useRef(false);
@@ -114,13 +113,37 @@ export default function ScrapeQueue() {
     }
   }
 
-  async function handleControl(action, value) {
+  async function handleControl(action) {
     try {
-      await api.queueControl(projectId, { queue: 'scrape', action, value });
+      await api.queueControl(projectId, { queue: 'scrape', action });
       showToast(`Scrape queue: ${action}`, 'success');
       await loadStatus();
     } catch (err) {
       showToast(err.message);
+    }
+  }
+
+  async function handleRerun(job) {
+    if (job.hasCredentials) {
+      try {
+        await api.rerunScrape(projectId, job.id);
+        showToast('Scrape job restarted', 'success');
+        setPolling(true);
+        await loadStatus();
+      } catch (err) {
+        showToast(err.message);
+      }
+    } else {
+      setSource(job.source);
+      sourceChangedByUser.current = false;
+      if (job.config?.baseUrl) setBaseUrl(job.config.baseUrl);
+      if (job.source === 'jira' && job.config?.jql) setJql(job.config.jql);
+      if (job.source === 'confluence' && job.config?.parentUrl) setParentUrl(job.config.parentUrl);
+      const prefix = job.source === 'jira' ? 'jira' : 'confluence';
+      setEmail(loadCred(`${prefix}Email`));
+      setToken(loadCred(`${prefix}Token`));
+      showToast('No saved credentials. Form pre-filled — review and submit.', 'success');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }
 
@@ -156,16 +179,10 @@ export default function ScrapeQueue() {
       )}
 
       <div className="queue-controls">
-        <button className="btn-sm btn-green" onClick={() => handleControl('start')}>Start</button>
-        <button className="btn-sm btn-orange" onClick={() => handleControl('stop')}>Stop</button>
+        {scrapeData?.stopped
+          ? <button className="btn-sm btn-green" onClick={() => handleControl('start')}>Start</button>
+          : <button className="btn-sm btn-orange" onClick={() => handleControl('stop')}>Stop</button>}
         <button className="btn-sm btn-red" onClick={() => handleControl('clear')}>Clear</button>
-        <label className="concurrency-label">
-          Concurrency: {concurrency}
-          <input type="range" min="2" max="10" value={concurrency}
-            onChange={e => setConcurrency(+e.target.value)}
-            onMouseUp={() => handleControl('concurrency', concurrency)}
-            onTouchEnd={() => handleControl('concurrency', concurrency)} />
-        </label>
       </div>
 
       <div className="queue-panel">
@@ -225,9 +242,15 @@ export default function ScrapeQueue() {
                 <div key={j.id} className="job-row">
                   <StatusBadge status={j.status} />
                   <span className="job-source">{j.source}</span>
+                  <span className="job-title">
+                    {j.source === 'jira' ? j.config?.jql?.slice(0, 60) : j.config?.parentUrl?.split('/').pop()}
+                  </span>
                   <span className="job-count">{j.docsEnqueued} docs</span>
                   <span className="job-time">{timeAgo(j.updatedAt || j.createdAt)}</span>
                   {j.error && <span className="job-error" title={j.error}>error</span>}
+                  {(j.status === 'completed' || j.status === 'failed') && (
+                    <button className="btn-sm" onClick={() => handleRerun(j)} title="Pre-fill form with this job's config">Rerun</button>
+                  )}
                 </div>
               ))}
             </div>

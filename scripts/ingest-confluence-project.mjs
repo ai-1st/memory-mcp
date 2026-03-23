@@ -8,46 +8,25 @@
  *
  * Options:
  *   --dry-run           Only discover pages, don't create a project or ingest anything
- *   --rules "text"      Categorization rules for the project (how categories should be assigned)
- *   --rules-file path   Read categorization rules from a file
- *
- * Example:
- *   node scripts/ingest-confluence-project.mjs "My Project" \
- *     https://myorg.atlassian.net/wiki/spaces/TEAM/pages/12345/Parent+Page
- *   node scripts/ingest-confluence-project.mjs "My Project" \
- *     https://myorg.atlassian.net/wiki/spaces/TEAM/pages/12345/Parent+Page --dry-run
- *   node scripts/ingest-confluence-project.mjs "My Project" \
- *     https://myorg.atlassian.net/wiki/spaces/TEAM/pages/12345/Parent+Page \
- *     --rules-file ./rules/my-project.txt
+ *   --force             Force reprocessing of already-ingested pages
  *
  * Env vars:
  *   CONFLUENCE_EMAIL   - your Atlassian email
- *   CONFLUENCE_TOKEN   - API token from https://id.atlassian.com/manage-profile/security/api-tokens
- *   MCP_URL            - Memory MCP endpoint (defaults to the deployed Lambda)
+ *   CONFLUENCE_TOKEN   - API token
+ *   ADMIN_URL          - Admin API endpoint
  */
 
-import { readFileSync } from 'fs';
 import { htmlToText } from '../src/lib/html.js';
 
-// Parse CLI args: positional args vs flags/options
 const positional = [];
 const cliFlags = new Set();
-const cliOptions = {};
 
 {
   const raw = process.argv.slice(2);
   for (let i = 0; i < raw.length; i++) {
-    if (raw[i] === '--dry-run') {
-      cliFlags.add('dry-run');
-    } else if (raw[i] === '--force') {
-      cliFlags.add('force');
-    } else if (raw[i] === '--rules' && i + 1 < raw.length) {
-      cliOptions.rules = raw[++i];
-    } else if (raw[i] === '--rules-file' && i + 1 < raw.length) {
-      cliOptions.rulesFile = raw[++i];
-    } else if (!raw[i].startsWith('--')) {
-      positional.push(raw[i]);
-    }
+    if (raw[i] === '--dry-run') cliFlags.add('dry-run');
+    else if (raw[i] === '--force') cliFlags.add('force');
+    else if (!raw[i].startsWith('--')) positional.push(raw[i]);
   }
 }
 
@@ -58,31 +37,23 @@ const parentUrl = positional[1];
 
 if (!projectName || !parentUrl) {
   console.error('Usage: node scripts/ingest-confluence-project.mjs <project-name> <confluence-parent-url> [options]');
-  console.error('Options: --dry-run  --force  --rules "text"  --rules-file path');
+  console.error('Options: --dry-run  --force');
   process.exit(1);
 }
 
-// Resolve categorization rules
-let categorizationRules = '';
-if (cliOptions.rulesFile) {
-  categorizationRules = readFileSync(cliOptions.rulesFile, 'utf-8').trim();
-  console.log(`Loaded categorization rules from ${cliOptions.rulesFile} (${categorizationRules.length} chars)`);
-} else if (cliOptions.rules) {
-  categorizationRules = cliOptions.rules.trim();
-  console.log(`Using inline categorization rules (${categorizationRules.length} chars)`);
-}
-
-const MCP_URL = process.env.MCP_URL || 'https://u5atpeuk5f4aabdba6bvcp4jfm0bpepd.lambda-url.us-east-1.on.aws/';
-
+const ADMIN_URL = process.env.ADMIN_URL;
 const email = process.env.CONFLUENCE_EMAIL;
 const token = process.env.CONFLUENCE_TOKEN;
+
 if (!email || !token) {
   console.error('Set CONFLUENCE_EMAIL and CONFLUENCE_TOKEN env vars.');
-  console.error('Get a token at: https://id.atlassian.com/manage-profile/security/api-tokens');
+  process.exit(1);
+}
+if (!ADMIN_URL && !dryRun) {
+  console.error('Set ADMIN_URL env var.');
   process.exit(1);
 }
 
-// Extract base URL and page ID from the Confluence URL
 const urlMatch = parentUrl.match(/^(https:\/\/[^/]+)\/wiki\/.*\/pages\/(\d+)/);
 if (!urlMatch) {
   console.error('Could not parse Confluence URL. Expected format:');
@@ -106,7 +77,6 @@ async function confluenceGet(path) {
   return res.json();
 }
 
-/** Fetch paginated children of a given content id and type ("page" or "folder"). */
 async function getChildren(parentId, childType, expand = '') {
   const children = [];
   let start = 0;
@@ -123,10 +93,6 @@ async function getChildren(parentId, childType, expand = '') {
   return children;
 }
 
-/**
- * Recursively discover and ingest pages as they are found.
- * Calls onPage(page, depth) for each page discovered.
- */
 async function walkPages(parentId, onPage, depth = 0) {
   const [childPages, childFolders] = await Promise.all([
     getChildren(parentId, 'page', 'body.storage'),
@@ -144,28 +110,19 @@ async function walkPages(parentId, onPage, depth = 0) {
   }
 }
 
-async function mcpCall(name, args = {}, config = {}) {
-  const params = { name, arguments: args };
-  if (Object.keys(config).length > 0) params.config = config;
-
-  const res = await fetch(MCP_URL, {
-    method: 'POST',
+async function adminRequest(method, path, body) {
+  const base = ADMIN_URL.replace(/\/+$/, '');
+  const opts = {
+    method,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params }),
-  });
-
-  const raw = await res.text();
-  let json;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    throw new Error(`Non-JSON response (HTTP ${res.status}): ${raw.slice(0, 200)}`);
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`${base}${path}`, opts);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Admin API ${res.status}: ${text.slice(0, 300)}`);
   }
-
-  if (json.error) throw new Error(json.error.message);
-  if (json.result?.isError) throw new Error(json.result.content?.[0]?.text || 'Tool error');
-  const text = json.result?.content?.[0]?.text;
-  return text ? JSON.parse(text) : json.result;
+  return res.json();
 }
 
 function pageLink(pageId, title) {
@@ -195,12 +152,12 @@ async function ingestPage(title, url, bodyHtml) {
   if (dryRun) return;
 
   try {
-    const result = await mcpCall('add_doc', {
+    const result = await adminRequest('POST', `/projects/${projectId}/documents`, {
       url,
       title,
       contents: `# ${title}\n\n${text}`,
       force: forceReprocess,
-    }, { projectId });
+    });
 
     if (result.skipped) {
       console.log(`  -> Unchanged, skipped`);
@@ -208,9 +165,7 @@ async function ingestPage(title, url, bodyHtml) {
       return;
     }
 
-    const created = result.topicsCreated || 0;
-    const replaced = result.topicsReplaced || 0;
-    console.log(`  -> ${result.howTosProcessed} how-tos (${created} new, ${replaced} replaced)`);
+    console.log(`  -> ${result.chunksCreated} chunks created`);
     success++;
   } catch (err) {
     console.error(`  -> Error: ${err.message}`);
@@ -218,32 +173,24 @@ async function ingestPage(title, url, bodyHtml) {
   }
 }
 
-// 1. Create project (unless dry-run)
 if (!dryRun) {
   console.log(`Creating project "${projectName}"...`);
-  const createArgs = { name: projectName };
-  if (categorizationRules) createArgs.rules = categorizationRules;
-  const project = await mcpCall('create_project', createArgs);
+  const project = await adminRequest('POST', '/projects', { name: projectName });
   projectId = project.id;
-  console.log(`Project created: ${projectId}`);
-  if (categorizationRules) console.log(`  Categorization rules attached (${categorizationRules.length} chars)`);
-  console.log('');
+  console.log(`Project created: ${projectId}\n`);
 }
 
-// 2. Ingest parent page
 console.log(`Fetching parent page ${parentPageId}...`);
 const parentPage = await confluenceGet(
   `/wiki/rest/api/content/${parentPageId}?expand=body.storage`
 );
 await ingestPage(parentPage.title, parentUrl, parentPage.body?.storage?.value || '');
 
-// 3. Walk and ingest children as they are discovered
 console.log(`\nCrawling child pages...`);
 await walkPages(parentPageId, async (page, depth) => {
-  const indent = '  '.repeat(depth);
   const url = pageLink(page.id, page.title);
   const bodyHtml = page.body?.storage?.value || '';
-  await ingestPage(`${indent}${page.title}`, url, bodyHtml);
+  await ingestPage(page.title, url, bodyHtml);
 });
 
 console.log(`\n${'='.repeat(50)}`);

@@ -1,16 +1,13 @@
-import { SQSClient, PurgeQueueCommand, SendMessageCommand } from '@aws-sdk/client-sqs';
-import {
-  LambdaClient,
-  ListEventSourceMappingsCommand,
-  UpdateEventSourceMappingCommand,
-} from '@aws-sdk/client-lambda';
-import { getQueueCounts, listScrapeJobs, listProcessJobs, clearJobs, updateProcessJob } from '../../lib/queue.js';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { getQueueCounts, listScrapeJobs, listProcessJobs, clearJobs, updateProcessJob, setQueueStopped, isQueueStopped } from '../../lib/queue.js';
 
-const sqs = new SQSClient({});
+async function listProcessJobIdsByStatus(projectId, status) {
+  const { items } = await listProcessJobs(projectId, { status, limit: undefined });
+  return items.map(j => j.id);
+}
+
 const lambda = new LambdaClient({});
 
-const SCRAPE_QUEUE_URL = process.env.SCRAPE_QUEUE_URL;
-const PROCESS_QUEUE_URL = process.env.PROCESS_QUEUE_URL;
 const SCRAPE_WORKER_FN = process.env.SCRAPE_WORKER_FN;
 const PROCESS_WORKER_FN = process.env.PROCESS_WORKER_FN;
 
@@ -21,11 +18,15 @@ export async function status({ params, query }) {
   const rawScrapeStatus = query.scrapeStatus || null;
   const scrapeStatusFilter = rawScrapeStatus === 'none' ? null : rawScrapeStatus;
 
+  const jobLimit = parseInt(query.limit, 10) || 100;
+  const afterSK = query.after || undefined;
   const skipProcessJobs = processStatusFilter === '__skip__';
-  const [counts, scrapeJobs, processJobs] = await Promise.all([
+  const [counts, scrapeJobs, processResult, scrapeStopped, processStopped] = await Promise.all([
     getQueueCounts(projectId),
     listScrapeJobs(projectId),
-    skipProcessJobs ? [] : listProcessJobs(projectId, { status: processStatusFilter }),
+    skipProcessJobs ? { items: [], hasMore: false } : listProcessJobs(projectId, { status: processStatusFilter, limit: jobLimit, afterSK }),
+    isQueueStopped(projectId, 'scrape'),
+    isQueueStopped(projectId, 'process'),
   ]);
 
   const filteredScrapeJobs = scrapeStatusFilter
@@ -37,17 +38,22 @@ export async function status({ params, query }) {
     body: {
       scrape: {
         ...counts.scrape,
+        stopped: scrapeStopped,
         jobs: filteredScrapeJobs.map(j => ({
-          id: j.id, source: j.source, status: j.status,
+          id: j.id, source: j.source, config: j.config, status: j.status,
           docsFound: j.docsFound, docsEnqueued: j.docsEnqueued,
+          hasCredentials: !!(j.credentials?.email && j.credentials?.token),
           error: j.error, createdAt: j.createdAt, updatedAt: j.updatedAt,
         })),
       },
       process: {
         ...counts.process,
-        jobs: processJobs.map(j => ({
+        stopped: processStopped,
+        hasMore: processResult.hasMore,
+        lastSK: processResult.items.length > 0 ? processResult.items[processResult.items.length - 1].SK : null,
+        jobs: processResult.items.map(j => ({
           id: j.id, docId: j.docId, url: j.url, title: j.title, status: j.status,
-          topicsCreated: j.topicsCreated, topicsReplaced: j.topicsReplaced,
+          chunksCreated: j.chunksCreated,
           error: j.error, createdAt: j.createdAt, updatedAt: j.updatedAt,
         })),
       },
@@ -55,83 +61,75 @@ export async function status({ params, query }) {
   };
 }
 
-async function findEventSourceMapping(functionName) {
-  const { EventSourceMappings } = await lambda.send(
-    new ListEventSourceMappingsCommand({ FunctionName: functionName })
-  );
-  return EventSourceMappings?.[0] || null;
+async function invokeWorker(functionName, payload) {
+  await lambda.send(new InvokeCommand({
+    FunctionName: functionName,
+    InvocationType: 'Event',
+    Payload: JSON.stringify(payload),
+  }));
 }
 
 export async function control({ params, body }) {
   const [projectId] = params;
-  const { queue, action, value } = body;
+  const { queue, action } = body;
 
   if (!queue || !['scrape', 'process'].includes(queue)) {
     return { statusCode: 400, body: { error: 'queue must be "scrape" or "process"' } };
   }
-  if (!action || !['start', 'stop', 'clear', 'concurrency'].includes(action)) {
-    return { statusCode: 400, body: { error: 'action must be start, stop, clear, or concurrency' } };
+  if (!action || !['start', 'stop', 'clear'].includes(action)) {
+    return { statusCode: 400, body: { error: 'action must be start, stop, or clear' } };
   }
 
-  const functionName = queue === 'scrape' ? SCRAPE_WORKER_FN : PROCESS_WORKER_FN;
-  const queueUrl = queue === 'scrape' ? SCRAPE_QUEUE_URL : PROCESS_QUEUE_URL;
-
-  if (action === 'start' || action === 'stop') {
-    const mapping = await findEventSourceMapping(functionName);
-    if (!mapping) return { statusCode: 404, body: { error: `No event source mapping found for ${queue} worker` } };
-
-    await lambda.send(new UpdateEventSourceMappingCommand({
-      UUID: mapping.UUID,
-      Enabled: action === 'start',
-    }));
-    return { statusCode: 200, body: { queue, action, enabled: action === 'start' } };
+  if (action === 'start') {
+    await setQueueStopped(projectId, queue, false);
+    const fn = queue === 'scrape' ? SCRAPE_WORKER_FN : PROCESS_WORKER_FN;
+    await invokeWorker(fn, { projectId });
+    return { statusCode: 200, body: { queue, action: 'started' } };
   }
 
-  if (action === 'concurrency') {
-    const concurrency = parseInt(value, 10);
-    if (!concurrency || concurrency < 2 || concurrency > 10) {
-      return { statusCode: 400, body: { error: 'value must be between 2 and 10' } };
-    }
-    const mapping = await findEventSourceMapping(functionName);
-    if (!mapping) return { statusCode: 404, body: { error: `No event source mapping found for ${queue} worker` } };
-
-    await lambda.send(new UpdateEventSourceMappingCommand({
-      UUID: mapping.UUID,
-      ScalingConfig: { MaximumConcurrency: concurrency },
-    }));
-    return { statusCode: 200, body: { queue, action, concurrency } };
+  if (action === 'stop') {
+    await setQueueStopped(projectId, queue, true);
+    return { statusCode: 200, body: { queue, action: 'stopped' } };
   }
 
   if (action === 'clear') {
-    await Promise.all([
-      sqs.send(new PurgeQueueCommand({ QueueUrl: queueUrl })).catch(() => {}),
-      clearJobs(projectId, queue),
-    ]);
-    return { statusCode: 200, body: { queue, action: 'cleared' } };
+    const deleted = await clearJobs(projectId, queue);
+    return { statusCode: 200, body: { queue, action: 'cleared', deleted } };
   }
 }
 
 export async function requeue({ params, body }) {
   const [projectId] = params;
-  const { jobIds } = body;
+  const { jobIds, status } = body;
 
-  if (!Array.isArray(jobIds) || jobIds.length === 0) {
-    return { statusCode: 400, body: { error: 'jobIds array is required' } };
+  let ids = Array.isArray(jobIds) ? jobIds : [];
+  if (ids.length === 0 && status) {
+    if (!['processing', 'failed'].includes(status)) {
+      return { statusCode: 400, body: { error: 'status must be "processing" or "failed"' } };
+    }
+    ids = await listProcessJobIdsByStatus(projectId, status);
+    if (ids.length === 0) {
+      return { statusCode: 200, body: { requeued: 0, results: [], message: `No ${status} jobs to requeue` } };
+    }
+  }
+  if (ids.length === 0) {
+    return { statusCode: 400, body: { error: 'jobIds array or status is required' } };
   }
 
   const results = [];
-  for (const jobId of jobIds) {
+  for (const jobId of ids) {
     try {
       await updateProcessJob(projectId, jobId, { status: 'pending' });
-      await sqs.send(new SendMessageCommand({
-        QueueUrl: PROCESS_QUEUE_URL,
-        MessageBody: JSON.stringify({ projectId, jobId }),
-      }));
       results.push({ jobId, status: 'requeued' });
     } catch (err) {
       results.push({ jobId, status: 'error', error: err.message });
     }
   }
 
-  return { statusCode: 200, body: { requeued: results.filter(r => r.status === 'requeued').length, results } };
+  const requeuedCount = results.filter(r => r.status === 'requeued').length;
+  if (requeuedCount > 0) {
+    await invokeWorker(PROCESS_WORKER_FN, { projectId });
+  }
+
+  return { statusCode: 200, body: { requeued: requeuedCount, results } };
 }

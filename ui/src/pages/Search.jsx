@@ -1,12 +1,15 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useApp } from '../lib/store';
-import TopicList from '../components/TopicList';
+import Markdown from '../components/Markdown';
 
 export default function Search() {
   const { projectId, setLoading, showToast } = useApp();
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState(null);
+  const [documents, setDocuments] = useState(null);
+  const [chunks, setChunks] = useState(null);
+  const [expanded, setExpanded] = useState({});
 
   async function doSearch() {
     const q = query.trim();
@@ -14,13 +17,19 @@ export default function Search() {
 
     setLoading(true);
     try {
-      const data = await api.search(projectId, q, 10);
-      setResults(data.results || []);
+      const data = await api.search(projectId, q);
+      setDocuments(data.documents || []);
+      setChunks(data.chunks || []);
+      setExpanded({});
     } catch (err) {
       showToast(err.message);
     } finally {
       setLoading(false);
     }
+  }
+
+  function toggleExpand(id) {
+    setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
   }
 
   return (
@@ -34,19 +43,69 @@ export default function Search() {
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && doSearch()}
-          placeholder="Search topics by meaning..."
+          placeholder="Search chunks by meaning..."
           autoComplete="off"
         />
         <button className="btn-primary" onClick={doSearch}>Search</button>
       </div>
-      {results === null && (
-        <div className="empty-state"><p>Enter a query to search across all topics.</p></div>
+
+      {documents === null && (
+        <div className="empty-state"><p>Enter a query to search across all chunks.</p></div>
       )}
-      {results && results.length === 0 && (
+
+      {documents && documents.length === 0 && (
         <div className="empty-state"><p>No results found.</p></div>
       )}
-      {results && results.length > 0 && (
-        <TopicList topics={results} showScore />
+
+      {documents && documents.length > 0 && (
+        <>
+          <div className="queue-panel">
+            <h2>Documents ({documents.length})</h2>
+            <div className="doc-list">
+              {documents.map(d => (
+                <Link key={d.id} to={`/document/${d.id}`} className="doc-list-row">
+                  <div className="doc-list-info">
+                    <span className="doc-list-title">{d.title || d.url || d.id}</span>
+                  </div>
+                  <span className="doc-list-chunks">{d.chunkCount} chunks</span>
+                  <span className="chunk-score">{(d.score / d.chunkCount * 100).toFixed(1)}% avg</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div className="queue-panel" style={{ marginTop: 16 }}>
+            <h2>Chunks ({chunks.length})</h2>
+            <div className="chunk-results">
+              {chunks.map(r => (
+                <div key={r.id} className="chunk-card" onClick={() => toggleExpand(r.id)}>
+                  <div className="chunk-card-header">
+                    <span className={`chunk-type-badge chunk-type-${r.type}`}>{r.type}</span>
+                    {r.docId && (
+                      <Link
+                        to={`/document/${r.docId}`}
+                        className="chunk-doc-link"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        {r.title?.slice(0, 60) || r.docId.slice(0, 10)}
+                      </Link>
+                    )}
+                    <span className="chunk-score">{(r.score * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="chunk-card-body">
+                    {expanded[r.id] ? (
+                      <Markdown text={r.summary || r.title} />
+                    ) : (
+                      <p className="chunk-preview">
+                        {(r.summary || r.title || '').slice(0, 200)}{(r.summary || r.title || '').length > 200 ? '...' : ''}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
       )}
     </section>
   );

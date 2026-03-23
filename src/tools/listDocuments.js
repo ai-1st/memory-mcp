@@ -20,15 +20,13 @@ export const listDocuments = {
 
   async execute(_args, config) {
     const { projectId } = config;
-    const docs = await listDocs(projectId);
+    const { items: docs } = await listDocs(projectId);
 
     const result = docs.map(d => ({
       id: d.id,
       url: d.url,
       title: d.title || '',
-      contentsSha256: d.contentsSha256 || '',
-      topicsCreated: d.topicsCreated ?? 0,
-      topicsReplaced: d.topicsReplaced ?? 0,
+      chunksCreated: d.chunksCreated ?? 0,
       createdAt: d.createdAt,
     }));
 

@@ -7,7 +7,7 @@ import {
   QueryCommand,
   UpdateCommand,
   DeleteCommand,
-  TransactWriteCommand,
+  BatchWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 
 const client = new DynamoDBClient({});
@@ -24,8 +24,34 @@ export async function putProject(project) {
     name: project.name,
     createdAt: new Date().toISOString(),
   };
-  if (project.rules) item.rules = project.rules;
+  if (project.prompts) item.prompts = project.prompts;
   await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
+}
+
+export async function updateProject(id, updates) {
+  const expressions = [];
+  const names = {};
+  const values = {};
+
+  if (updates.name !== undefined) {
+    expressions.push('#n = :name');
+    names['#n'] = 'name';
+    values[':name'] = updates.name;
+  }
+  if (updates.prompts !== undefined) {
+    expressions.push('prompts = :prompts');
+    values[':prompts'] = updates.prompts;
+  }
+
+  if (expressions.length === 0) return;
+
+  await ddb.send(new UpdateCommand({
+    TableName: TABLE,
+    Key: { PK: 'PROJECT', SK: `PROJECT#${id}` },
+    UpdateExpression: `SET ${expressions.join(', ')}`,
+    ...(Object.keys(names).length > 0 && { ExpressionAttributeNames: names }),
+    ExpressionAttributeValues: values,
+  }));
 }
 
 export async function getProject(id) {
@@ -63,8 +89,7 @@ export async function putDoc(projectId, doc) {
     title: doc.title || '',
     contents: doc.contents,
     contentsSha256: doc.contentsSha256 || '',
-    topicsCreated: doc.topicsCreated ?? 0,
-    topicsReplaced: doc.topicsReplaced ?? 0,
+    chunksCreated: 0,
     createdAt: new Date().toISOString(),
   };
   if (doc.url) {
@@ -75,12 +100,24 @@ export async function putDoc(projectId, doc) {
   await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
 }
 
-export async function updateDocStats(projectId, docId, topicsCreated, topicsReplaced) {
+export async function updateDoc(projectId, docId, updates) {
+  const exprs = [];
+  const names = {};
+  const values = {};
+  for (const [key, val] of Object.entries(updates)) {
+    const attr = `#${key}`;
+    const valKey = `:${key}`;
+    exprs.push(`${attr} = ${valKey}`);
+    names[attr] = key;
+    values[valKey] = val;
+  }
+  if (exprs.length === 0) return;
   await ddb.send(new UpdateCommand({
     TableName: TABLE,
     Key: { PK: `P#${projectId}#DOC`, SK: `DOC#${docId}` },
-    UpdateExpression: 'SET topicsCreated = :c, topicsReplaced = :r',
-    ExpressionAttributeValues: { ':c': topicsCreated, ':r': topicsReplaced },
+    UpdateExpression: `SET ${exprs.join(', ')}`,
+    ExpressionAttributeNames: names,
+    ExpressionAttributeValues: values,
   }));
 }
 
@@ -105,51 +142,68 @@ export async function getLatestDocByUrl(projectId, url) {
   return Items && Items.length > 0 ? Items[0] : null;
 }
 
-export async function listDocs(projectId) {
+export async function listDocs(projectId, { limit, afterSK } = {}) {
+  const pk = `P#${projectId}#DOC`;
   const items = [];
-  let lastKey;
+  let lastKey = afterSK ? { PK: pk, SK: afterSK } : undefined;
   do {
     const { Items, LastEvaluatedKey } = await ddb.send(new QueryCommand({
       TableName: TABLE,
       KeyConditionExpression: 'PK = :pk',
-      ExpressionAttributeValues: { ':pk': `P#${projectId}#DOC` },
+      ExpressionAttributeValues: { ':pk': pk },
       ExclusiveStartKey: lastKey,
     }));
     items.push(...(Items || []));
     lastKey = LastEvaluatedKey;
+    if (limit && items.length >= limit) break;
   } while (lastKey);
-  return items;
+  if (!limit) return { items, hasMore: false };
+  const result = items.slice(0, limit);
+  const hasMore = items.length > limit || !!lastKey;
+  return { items: result, hasMore };
 }
 
-// ── Topics ──
+// ── Chunks ──
 
-export async function putTopic(projectId, topic) {
+export async function putChunk(projectId, chunk) {
   await ddb.send(new PutCommand({
     TableName: TABLE,
     Item: {
-      PK: `P#${projectId}#TOPIC`,
-      SK: `TOPIC#${topic.id}`,
-      GSI1PK: `P#${projectId}#CAT#${topic.category}`,
-      GSI1SK: `TOPIC#${topic.id}`,
-      id: topic.id,
-      category: topic.category,
-      title: topic.title,
-      summary: topic.summary,
-      doc_ids: topic.doc_ids,
-      sha256: topic.sha256,
+      PK: `P#${projectId}#CHUNK`,
+      SK: `CHUNK#${chunk.id}`,
+      GSI1PK: `P#${projectId}#DOCCHUNKS#${chunk.docId}`,
+      GSI1SK: `CHUNK#${chunk.id}`,
+      id: chunk.id,
+      type: chunk.type,
+      content: chunk.content,
+      docId: chunk.docId,
+      sha256: chunk.sha256,
     },
   }));
 }
 
-export async function getTopic(projectId, id) {
-  const { Item } = await ddb.send(new GetCommand({
-    TableName: TABLE,
-    Key: { PK: `P#${projectId}#TOPIC`, SK: `TOPIC#${id}` },
-  }));
-  return Item || null;
+export async function listChunks(projectId, { limit, afterSK } = {}) {
+  const pk = `P#${projectId}#CHUNK`;
+  const items = [];
+  let lastKey = afterSK ? { PK: pk, SK: afterSK } : undefined;
+  do {
+    const { Items, LastEvaluatedKey } = await ddb.send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: 'PK = :pk',
+      ExpressionAttributeValues: { ':pk': pk },
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(Items || []));
+    lastKey = LastEvaluatedKey;
+    if (limit && items.length >= limit) break;
+  } while (lastKey);
+  if (!limit) return { items, hasMore: false };
+  const result = items.slice(0, limit);
+  const hasMore = items.length > limit || !!lastKey;
+  return { items: result, hasMore };
 }
 
-export async function queryTopicsByCategory(projectId, category) {
+export async function listChunksByDoc(projectId, docId) {
   const items = [];
   let lastKey;
   do {
@@ -157,7 +211,7 @@ export async function queryTopicsByCategory(projectId, category) {
       TableName: TABLE,
       IndexName: 'GSI1',
       KeyConditionExpression: 'GSI1PK = :pk',
-      ExpressionAttributeValues: { ':pk': `P#${projectId}#CAT#${category}` },
+      ExpressionAttributeValues: { ':pk': `P#${projectId}#DOCCHUNKS#${docId}` },
       ExclusiveStartKey: lastKey,
     }));
     items.push(...(Items || []));
@@ -166,77 +220,73 @@ export async function queryTopicsByCategory(projectId, category) {
   return items;
 }
 
-export async function findTopicBySha256(projectId, sha256) {
-  const { Items } = await ddb.send(new QueryCommand({
-    TableName: TABLE,
-    KeyConditionExpression: 'PK = :pk',
-    FilterExpression: 'sha256 = :sha',
-    ExpressionAttributeValues: {
-      ':pk': `P#${projectId}#TOPIC`,
-      ':sha': sha256,
-    },
-  }));
-  return Items && Items.length > 0 ? Items[0] : null;
+export async function deleteChunksByDoc(projectId, docId) {
+  const chunks = await listChunksByDoc(projectId, docId);
+  let deleted = 0;
+  for (let i = 0; i < chunks.length; i += 25) {
+    const batch = chunks.slice(i, i + 25);
+    await ddb.send(new BatchWriteCommand({
+      RequestItems: {
+        [TABLE]: batch.map(item => ({
+          DeleteRequest: { Key: { PK: `P#${projectId}#CHUNK`, SK: `CHUNK#${item.id}` } },
+        })),
+      },
+    }));
+    deleted += batch.length;
+  }
+  return deleted;
 }
 
-/** Move a topic to PK=P#{projectId}#REPLACED and delete original */
-export async function replaceTopic(projectId, topicId, replacementTopicId) {
-  const existing = await getTopic(projectId, topicId);
-  if (!existing) return;
+// ── Project deletion ──
 
-  await ddb.send(new TransactWriteCommand({
-    TransactItems: [
-      {
-        Delete: {
-          TableName: TABLE,
-          Key: { PK: `P#${projectId}#TOPIC`, SK: `TOPIC#${topicId}` },
-        },
-      },
-      {
-        Put: {
-          TableName: TABLE,
-          Item: {
-            ...existing,
-            PK: `P#${projectId}#REPLACED`,
-            replacement_topic_id: replacementTopicId,
-          },
-        },
-      },
-    ],
-  }));
-}
-
-// ── Categories ──
-
-export async function listCategories(projectId) {
-  const items = [];
+async function deleteAllByPartition(pk) {
   let lastKey;
+  let deleted = 0;
   do {
     const { Items, LastEvaluatedKey } = await ddb.send(new QueryCommand({
       TableName: TABLE,
       KeyConditionExpression: 'PK = :pk',
-      ExpressionAttributeValues: { ':pk': `P#${projectId}#CAT` },
+      ExpressionAttributeValues: { ':pk': pk },
+      ProjectionExpression: 'PK, SK',
       ExclusiveStartKey: lastKey,
     }));
-    items.push(...(Items || []));
+    if (Items && Items.length > 0) {
+      for (let i = 0; i < Items.length; i += 25) {
+        const batch = Items.slice(i, i + 25);
+        await ddb.send(new BatchWriteCommand({
+          RequestItems: {
+            [TABLE]: batch.map(item => ({
+              DeleteRequest: { Key: { PK: item.PK, SK: item.SK } },
+            })),
+          },
+        }));
+      }
+      deleted += Items.length;
+    }
     lastKey = LastEvaluatedKey;
   } while (lastKey);
-  return items;
+  return deleted;
 }
 
-export async function incrementCategory(projectId, category, delta = 1) {
-  await ddb.send(new UpdateCommand({
+export async function deleteProject(projectId) {
+  const partitions = [
+    `P#${projectId}#DOC`,
+    `P#${projectId}#CHUNK`,
+    `P#${projectId}#SCRAPE`,
+    `P#${projectId}#PQUEUE`,
+  ];
+
+  const counts = {};
+  for (const pk of partitions) {
+    counts[pk] = await deleteAllByPartition(pk);
+  }
+
+  await ddb.send(new DeleteCommand({
     TableName: TABLE,
-    Key: { PK: `P#${projectId}#CAT`, SK: `CAT#${category}` },
-    UpdateExpression: 'SET topicCount = if_not_exists(topicCount, :zero) + :d, GSI1PK = :g1pk, GSI1SK = :g1sk, category = :cat',
-    ExpressionAttributeValues: {
-      ':zero': 0,
-      ':d': delta,
-      ':g1pk': `P#${projectId}#CATS`,
-      ':g1sk': `CAT#${category}`,
-      ':cat': category,
-    },
+    Key: { PK: 'PROJECT', SK: `PROJECT#${projectId}` },
   }));
+
+  return counts;
 }
 
 // ── Embeddings cache (global, not project-scoped) ──

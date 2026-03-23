@@ -128,16 +128,14 @@ export async function* scrapeConfluence({ baseUrl, email, token, parentUrl }) {
     return children;
   }
 
-  function pageLink(pageId, title) {
-    return `${baseUrl}/wiki/pages/${pageId}/${encodeURIComponent(title || '')}`;
-  }
-
   function makePage(page) {
     const bodyHtml = page.body?.storage?.value || '';
     const text = htmlToText(bodyHtml);
     if (text.length < 50) return null;
+    const webui = page._links?.webui;
+    const url = webui ? `${baseUrl}/wiki${webui}` : `${baseUrl}/wiki/pages/viewpage.action?pageId=${page.id}`;
     return {
-      url: pageLink(page.id, page.title),
+      url,
       title: page.title,
       contents: `# ${page.title}\n\n${text}`,
     };

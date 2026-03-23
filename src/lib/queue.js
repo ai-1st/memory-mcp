@@ -17,22 +17,21 @@ const TABLE = process.env.TABLE_NAME;
 
 export async function putScrapeJob(projectId, job) {
   const now = new Date().toISOString();
-  await ddb.send(new PutCommand({
-    TableName: TABLE,
-    Item: {
-      PK: `P#${projectId}#SCRAPE`,
-      SK: `JOB#${job.id}`,
-      id: job.id,
-      source: job.source,
-      config: job.config,
-      status: job.status || 'pending',
-      docsFound: job.docsFound ?? 0,
-      docsEnqueued: job.docsEnqueued ?? 0,
-      error: job.error || null,
-      createdAt: job.createdAt || now,
-      updatedAt: now,
-    },
-  }));
+  const item = {
+    PK: `P#${projectId}#SCRAPE`,
+    SK: `JOB#${job.id}`,
+    id: job.id,
+    source: job.source,
+    config: job.config,
+    status: job.status || 'pending',
+    docsFound: job.docsFound ?? 0,
+    docsEnqueued: job.docsEnqueued ?? 0,
+    error: job.error || null,
+    createdAt: job.createdAt || now,
+    updatedAt: now,
+  };
+  if (job.credentials) item.credentials = job.credentials;
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
 }
 
 export async function getScrapeJob(projectId, jobId) {
@@ -98,8 +97,7 @@ export async function putProcessJob(projectId, job) {
       title: job.title || '',
       docId: job.docId || null,
       status: job.status || 'pending',
-      topicsCreated: job.topicsCreated ?? 0,
-      topicsReplaced: job.topicsReplaced ?? 0,
+      chunksCreated: job.chunksCreated ?? 0,
       error: job.error || null,
       scrapeJobId: job.scrapeJobId || null,
       createdAt: job.createdAt || now,
@@ -140,14 +138,15 @@ export async function updateProcessJob(projectId, jobId, updates) {
   }));
 }
 
-export async function listProcessJobs(projectId, { status, limit } = {}) {
+export async function listProcessJobs(projectId, { status, limit, afterSK } = {}) {
+  const pk = `P#${projectId}#PQUEUE`;
   const items = [];
-  let lastKey;
+  let lastKey = afterSK ? { PK: pk, SK: afterSK } : undefined;
   do {
     const params = {
       TableName: TABLE,
       KeyConditionExpression: 'PK = :pk',
-      ExpressionAttributeValues: { ':pk': `P#${projectId}#PQUEUE` },
+      ExpressionAttributeValues: { ':pk': pk },
       ScanIndexForward: false,
       ExclusiveStartKey: lastKey,
     };
@@ -161,27 +160,107 @@ export async function listProcessJobs(projectId, { status, limit } = {}) {
     lastKey = LastEvaluatedKey;
     if (limit && items.length >= limit) break;
   } while (lastKey);
-  return limit ? items.slice(0, limit) : items;
+  const result = limit ? items.slice(0, limit) : items;
+  const hasMore = limit ? items.length > limit || !!lastKey : false;
+  return { items: result, hasMore };
 }
 
 // ── Aggregation ──
 
+async function countByStatusProjection(pk) {
+  const counts = { pending: 0, scraping: 0, processing: 0, completed: 0, failed: 0 };
+  let total = 0;
+  let lastKey;
+  do {
+    const { Items, LastEvaluatedKey } = await ddb.send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: 'PK = :pk',
+      ExpressionAttributeValues: { ':pk': pk },
+      ProjectionExpression: '#s',
+      ExpressionAttributeNames: { '#s': 'status' },
+      ExclusiveStartKey: lastKey,
+    }));
+    for (const item of (Items || [])) {
+      counts[item.status] = (counts[item.status] || 0) + 1;
+      total++;
+    }
+    lastKey = LastEvaluatedKey;
+  } while (lastKey);
+  return { ...counts, total };
+}
+
 export async function getQueueCounts(projectId) {
-  const [scrapeJobs, processJobs] = await Promise.all([
-    listScrapeJobs(projectId),
-    listProcessJobs(projectId),
+  const [scrape, process] = await Promise.all([
+    countByStatusProjection(`P#${projectId}#SCRAPE`),
+    countByStatusProjection(`P#${projectId}#PQUEUE`),
   ]);
+  return { scrape, process };
+}
 
-  const countByStatus = (jobs) => {
-    const counts = { pending: 0, scraping: 0, processing: 0, completed: 0, failed: 0 };
-    for (const j of jobs) counts[j.status] = (counts[j.status] || 0) + 1;
-    return counts;
-  };
+// ── Claim (conditional update to prevent race conditions) ──
 
-  return {
-    scrape: { ...countByStatus(scrapeJobs), total: scrapeJobs.length },
-    process: { ...countByStatus(processJobs), total: processJobs.length },
-  };
+export async function claimProcessJob(projectId, jobId) {
+  try {
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK: `P#${projectId}#PQUEUE`, SK: `JOB#${jobId}` },
+      UpdateExpression: 'SET #s = :processing, #updatedAt = :now',
+      ConditionExpression: '#s = :pending',
+      ExpressionAttributeNames: { '#s': 'status', '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: {
+        ':processing': 'processing',
+        ':pending': 'pending',
+        ':now': new Date().toISOString(),
+      },
+    }));
+    return true;
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') return false;
+    throw err;
+  }
+}
+
+export async function claimScrapeJob(projectId, jobId) {
+  try {
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK: `P#${projectId}#SCRAPE`, SK: `JOB#${jobId}` },
+      UpdateExpression: 'SET #s = :scraping, #updatedAt = :now',
+      ConditionExpression: '#s = :pending',
+      ExpressionAttributeNames: { '#s': 'status', '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: {
+        ':scraping': 'scraping',
+        ':pending': 'pending',
+        ':now': new Date().toISOString(),
+      },
+    }));
+    return true;
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') return false;
+    throw err;
+  }
+}
+
+// ── Queue stop flag ──
+
+export async function setQueueStopped(projectId, queue, stopped) {
+  await ddb.send(new PutCommand({
+    TableName: TABLE,
+    Item: {
+      PK: `P#${projectId}#QSTOP`,
+      SK: queue,
+      stopped,
+      updatedAt: new Date().toISOString(),
+    },
+  }));
+}
+
+export async function isQueueStopped(projectId, queue) {
+  const { Item } = await ddb.send(new GetCommand({
+    TableName: TABLE,
+    Key: { PK: `P#${projectId}#QSTOP`, SK: queue },
+  }));
+  return Item?.stopped === true;
 }
 
 // ── Cleanup ──

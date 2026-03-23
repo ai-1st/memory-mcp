@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useApp } from '../lib/store';
+
+const PAGE_SIZE = 100;
 
 function StatusBadge({ status }) {
   return <span className={`status-badge status-${status}`}>{status}</span>;
@@ -9,44 +12,109 @@ function StatusBadge({ status }) {
 export default function ProcessQueue() {
   const { projectId, showToast } = useApp();
   const [processData, setProcessData] = useState(null);
+  const [jobs, setJobs] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [lastSK, setLastSK] = useState(null);
   const [polling, setPolling] = useState(false);
   const pollRef = useRef(null);
-  const [concurrency, setConcurrency] = useState(5);
   const [filter, setFilter] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [requeuing, setRequeueing] = useState(false);
 
-  const loadStatus = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     if (!projectId) return;
     try {
-      const data = await api.queueStatus(projectId, { processStatus: filter || 'none' });
+      const data = await api.queueStatus(projectId, {
+        processStatus: filter || 'none',
+        limit: PAGE_SIZE,
+      });
       setProcessData(data.process);
-    } catch { /* polling */ }
+      setJobs(data.process.jobs || []);
+      setHasMore(data.process.hasMore ?? false);
+      setLastSK(data.process.lastSK ?? null);
+    } catch { /* ignore */ }
   }, [projectId, filter]);
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  async function loadMore() {
+    if (!projectId || !lastSK) return;
+    setLoadingMore(true);
+    try {
+      const data = await api.queueStatus(projectId, {
+        processStatus: filter || 'none',
+        limit: PAGE_SIZE,
+        after: lastSK,
+      });
+      setJobs(prev => [...prev, ...(data.process.jobs || [])]);
+      setHasMore(data.process.hasMore ?? false);
+      setLastSK(data.process.lastSK ?? null);
+      setProcessData(prev => ({ ...prev, ...data.process, jobs: undefined }));
+    } catch { /* ignore */ }
+    finally { setLoadingMore(false); }
+  }
+
+  useEffect(() => {
+    setLoading(true);
+    fetchData().finally(() => setLoading(false));
+  }, [fetchData]);
 
   useEffect(() => {
     if (polling && projectId) {
-      pollRef.current = setInterval(loadStatus, 3000);
+      pollRef.current = setInterval(async () => {
+        if (!projectId) return;
+        try {
+          const data = await api.queueStatus(projectId, { processStatus: 'none' });
+          setProcessData(prev => prev ? { ...prev, ...data.process, jobs: undefined } : data.process);
+        } catch { /* ignore */ }
+      }, 3000);
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [polling, projectId, loadStatus]);
+  }, [polling, projectId]);
 
   useEffect(() => {
     if (!processData) return;
     setPolling((processData.processing ?? 0) > 0 || (processData.pending ?? 0) > 0);
   }, [processData]);
 
-  async function handleControl(action, value) {
+  async function handleRefresh() {
+    setLoading(true);
+    await fetchData();
+    setLoading(false);
+  }
+
+  async function handleControl(action) {
     try {
-      await api.queueControl(projectId, { queue: 'process', action, value });
+      await api.queueControl(projectId, { queue: 'process', action });
       showToast(`Process queue: ${action}`, 'success');
-      await loadStatus();
+      await handleRefresh();
     } catch (err) {
       showToast(err.message);
     }
   }
 
-  const filteredJobs = processData?.jobs || [];
+  async function handleRequeueStuck() {
+    const count = processData?.processing ?? 0;
+    if (!count || requeuing) return;
+    setRequeueing(true);
+    try {
+      const res = await api.queueRequeue(projectId, { status: 'processing' });
+      showToast(`Requeued ${res.requeued} stuck jobs`, 'success');
+      await handleRefresh();
+    } catch (err) {
+      showToast(err.message);
+    } finally {
+      setRequeueing(false);
+    }
+  }
+
+  function handleFilterClick(newFilter) {
+    const next = filter === newFilter ? null : newFilter;
+    setFilter(next);
+    setJobs([]);
+    setHasMore(false);
+    setLastSK(null);
+    setLoading(true);
+  }
 
   if (!projectId) {
     return (
@@ -61,62 +129,80 @@ export default function ProcessQueue() {
     <section className="view-section">
       <header className="view-header">
         <h1>Process Queue</h1>
-        <button className="btn-sm" onClick={loadStatus}>Refresh</button>
+        <button className="btn-sm" onClick={handleRefresh} disabled={loading}>
+          {loading ? 'Loading...' : 'Refresh'}
+        </button>
       </header>
 
       {processData && (
         <div className="queue-stats">
           <button className={`stat-item stat-all${!filter ? ' stat-active-filter' : ''}`}
-            onClick={() => setFilter(null)}>{processData.total ?? 0} all</button>
+            onClick={() => handleFilterClick(null)} disabled={loading}>{processData.total ?? 0} all</button>
           <button className={`stat-item stat-pending${filter === 'pending' ? ' stat-active-filter' : ''}`}
-            onClick={() => setFilter(filter === 'pending' ? null : 'pending')}>{processData.pending ?? 0} pending</button>
+            onClick={() => handleFilterClick('pending')} disabled={loading}>{processData.pending ?? 0} pending</button>
           <button className={`stat-item stat-active${filter === 'processing' ? ' stat-active-filter' : ''}`}
-            onClick={() => setFilter(filter === 'processing' ? null : 'processing')}>{processData.processing ?? 0} active</button>
+            onClick={() => handleFilterClick('processing')} disabled={loading}>{processData.processing ?? 0} active</button>
           <button className={`stat-item stat-completed${filter === 'completed' ? ' stat-active-filter' : ''}`}
-            onClick={() => setFilter(filter === 'completed' ? null : 'completed')}>{processData.completed ?? 0} done</button>
+            onClick={() => handleFilterClick('completed')} disabled={loading}>{processData.completed ?? 0} done</button>
           <button className={`stat-item stat-failed${filter === 'failed' ? ' stat-active-filter' : ''}`}
-            onClick={() => setFilter(filter === 'failed' ? null : 'failed')}>{processData.failed ?? 0} failed</button>
+            onClick={() => handleFilterClick('failed')} disabled={loading}>{processData.failed ?? 0} failed</button>
         </div>
       )}
 
       <div className="queue-controls">
-        <button className="btn-sm btn-green" onClick={() => handleControl('start')}>Start</button>
-        <button className="btn-sm btn-orange" onClick={() => handleControl('stop')}>Stop</button>
+        {processData?.stopped
+          ? <button className="btn-sm btn-green" onClick={() => handleControl('start')}>Start</button>
+          : <button className="btn-sm btn-orange" onClick={() => handleControl('stop')}>Stop</button>}
         <button className="btn-sm btn-red" onClick={() => handleControl('clear')}>Clear</button>
-        <label className="concurrency-label">
-          Concurrency: {concurrency}
-          <input type="range" min="2" max="10" value={concurrency}
-            onChange={e => setConcurrency(+e.target.value)}
-            onMouseUp={() => handleControl('concurrency', concurrency)}
-            onTouchEnd={() => handleControl('concurrency', concurrency)} />
-        </label>
+        {(processData?.processing ?? 0) > 0 && (
+          <button className="btn-sm btn-amber" onClick={handleRequeueStuck} disabled={requeuing} title="Reset stuck jobs (timed out) back to pending">
+            {requeuing ? 'Requeueing...' : `Requeue ${processData.processing} stuck`}
+          </button>
+        )}
       </div>
 
-      {filteredJobs.length > 0 && (
+      {loading && jobs.length === 0 && (
+        <div className="empty-state"><span className="queue-spinner" /> {filter ? `Loading ${filter} jobs...` : 'Loading...'}</div>
+      )}
+
+      {!loading && jobs.length > 0 && (
         <div className="queue-panel">
-          <h2>Jobs {filter && <span className="filter-label">({filter})</span>}</h2>
+          <h2>Jobs {filter && <span className="filter-label">
+            ({filter} &mdash; {jobs.length} of {processData[filter] ?? '?'})
+          </span>}</h2>
           <div className="job-list">
-            {filteredJobs.map(j => (
+            {jobs.map(j => (
               <div key={j.id} className="job-row">
                 <StatusBadge status={j.status} />
-                {j.url ? (
-                  <a className="job-title" href={j.url} target="_blank" rel="noopener noreferrer" title={j.url}>{j.title || j.url}</a>
+                {j.docId ? (
+                  <Link className="job-title" to={`/document/${j.docId}`} title={j.url}>{j.title || j.url || '(no title)'}</Link>
                 ) : (
-                  <span className="job-title">{j.title || '(no url)'}</span>
+                  <span className="job-title">{j.title || j.url || '(no title)'}</span>
                 )}
                 {j.status === 'completed' && (
-                  <span className="job-count">+{j.topicsCreated} / {j.topicsReplaced}r</span>
+                  <span className="job-count">{j.chunksCreated} chunks</span>
                 )}
                 <span className="job-time">{timeAgo(j.updatedAt || j.createdAt)}</span>
                 {j.error && <span className="job-error" title={j.error}>error</span>}
               </div>
             ))}
           </div>
+          {hasMore && (
+            <button className="btn-load-more" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? <><span className="queue-spinner" /> Loading...</> : `Load next ${PAGE_SIZE}`}
+            </button>
+          )}
         </div>
       )}
 
-      {processData && filteredJobs.length === 0 && (
-        <div className="empty-state"><p>{filter ? `No ${filter} jobs.` : 'No jobs in the process queue yet. Submit a scrape job first.'}</p></div>
+      {!loading && processData && !filter && (processData.total ?? 0) > 0 && (
+        <div className="empty-state"><p>Click a status above to view jobs.</p></div>
+      )}
+      {!loading && processData && !filter && (processData.total ?? 0) === 0 && (
+        <div className="empty-state"><p>No jobs in the process queue yet. Submit a scrape job first.</p></div>
+      )}
+      {!loading && processData && filter && jobs.length === 0 && (
+        <div className="empty-state"><p>No {filter} jobs.</p></div>
       )}
     </section>
   );

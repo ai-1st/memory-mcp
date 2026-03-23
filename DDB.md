@@ -15,10 +15,10 @@ Single-table design. All entities live in one table.
 |---|---|---|---|---|
 | Project | `PROJECT` | `PROJECT#<ulid>` | — | — |
 | Document | `P#<pid>#DOC` | `DOC#<ulid>` | `P#<pid>#DOCURL#<sha256(url)>` | `DOC#<ulid>` |
-| Topic | `P#<pid>#TOPIC` | `TOPIC#<ulid>` | `P#<pid>#CAT#<category>` | `TOPIC#<ulid>` |
-| Replaced Topic | `P#<pid>#REPLACED` | `TOPIC#<ulid>` | *(original values)* | *(original values)* |
-| Category | `P#<pid>#CAT` | `CAT#<category>` | `P#<pid>#CATS` | `CAT#<category>` |
+| Chunk | `P#<pid>#CHUNK` | `CHUNK#<ulid>` | `P#<pid>#DOCCHUNKS#<docId>` | `CHUNK#<ulid>` |
 | Embedding Cache | `EMBED` | `EMBED#<sha256>` | — | — |
+| Scrape Job | `P#<pid>#SCRAPE` | `JOB#<ulid>` | — | — |
+| Process Job | `P#<pid>#PQUEUE` | `JOB#<ulid>` | — | — |
 
 ### Project
 
@@ -26,8 +26,8 @@ Single-table design. All entities live in one table.
 |---|---|---|
 | `id` | String (ULID) | Project identifier |
 | `name` | String | Display name |
+| `prompts` | Map (optional) | Configurable prompts: `{ chunking: "..." }` |
 | `createdAt` | String (ISO 8601) | Creation timestamp |
-| `rules` | String (optional) | Categorization rules for how-to extraction |
 
 ### Document
 
@@ -41,40 +41,21 @@ GSI1 enables lookup by URL to detect unchanged content and skip reprocessing.
 | `title` | String | Page / article title |
 | `contents` | String | Full text content |
 | `contentsSha256` | String | SHA-256 of `contents`, used for change detection |
-| `topicsCreated` | Number | Count of topics ADDed when this doc was processed |
-| `topicsReplaced` | Number | Count of topics REPLACEd when this doc was processed |
+| `chunksCreated` | Number | Count of chunks created when this doc was processed |
 | `createdAt` | String (ISO 8601) | When the document was ingested |
 
-### Topic
+### Chunk
 
-How-to entries extracted from documents.
-
-| Attribute | Type | Description |
-|---|---|---|
-| `id` | String (ULID) | Topic identifier |
-| `category` | String | Hierarchical category path (e.g. `infra/deployments`) |
-| `title` | String | Action-oriented title (starts with "How to") |
-| `summary` | String | Step-by-step procedure text |
-| `doc_ids` | List\<String\> | ULIDs of source documents |
-| `sha256` | String | SHA-256 of `title + summary`, used for deduplication |
-
-### Replaced Topic
-
-Archived topics that were superseded by a newer merged topic.
-Same attributes as Topic, plus:
+Individual chunks extracted from documents. Each chunk is a standalone piece
+of text with contextual preamble, suitable for embedding and retrieval.
 
 | Attribute | Type | Description |
 |---|---|---|
-| `replacement_topic_id` | String (ULID) | ID of the topic that replaced this one |
-
-### Category
-
-Aggregate counts per category within a project.
-
-| Attribute | Type | Description |
-|---|---|---|
-| `category` | String | Category path |
-| `topicCount` | Number | Number of active topics in this category |
+| `id` | String (ULID) | Chunk identifier |
+| `type` | String | `summary`, `qa`, or `text` |
+| `content` | String | The chunk text (with contextual preamble) |
+| `docId` | String (ULID) | Source document ID |
+| `sha256` | String | SHA-256 of content, for dedup |
 
 ### Embedding Cache
 
@@ -84,17 +65,28 @@ Global (not project-scoped) cache of text embeddings to avoid redundant Bedrock 
 |---|---|---|
 | `embedding` | List\<Number\> | Vector embedding array |
 
-## S3 Vector Storage
+### Scrape Job
 
-Bucket: `${StackName}-vectors-${AccountId}`
+| Attribute | Type | Description |
+|---|---|---|
+| `id` | String (ULID) | Job identifier |
+| `source` | String | `jira` or `confluence` |
+| `config` | Map | Source-specific config (baseUrl, jql, parentUrl) |
+| `status` | String | `pending`, `scraping`, `completed`, `failed` |
+| `docsFound` | Number | Count of documents found |
+| `error` | String | Error message if failed |
+| `createdAt` | String (ISO 8601) | When the job was created |
 
-Each topic's embedding is stored as a JSON file:
+### Process Job
 
-```
-vectors/<projectId>/<topicId>.json
-```
-
-Contains: `{ id, category, title, summary, doc_ids, embedding }`.
+| Attribute | Type | Description |
+|---|---|---|
+| `id` | String (ULID) | Job identifier |
+| `docId` | String (ULID) | Document to process |
+| `status` | String | `pending`, `processing`, `completed`, `failed` |
+| `chunksCreated` | Number | Count of chunks created |
+| `error` | String | Error message if failed |
+| `createdAt` | String (ISO 8601) | When the job was created |
 
 ## Access Patterns
 
@@ -105,10 +97,8 @@ Contains: `{ id, category, title, summary, doc_ids, embedding }`.
 | Get document by ID | `PK = 'P#<pid>#DOC', SK = 'DOC#<id>'` | Table |
 | List documents for project | `PK = 'P#<pid>#DOC'` | Table |
 | Get latest doc by URL | `GSI1PK = 'P#<pid>#DOCURL#<sha256(url)>'`, ScanIndexForward=false, Limit=1 | GSI1 |
-| Get topic by ID | `PK = 'P#<pid>#TOPIC', SK = 'TOPIC#<id>'` | Table |
-| List topics by category | `GSI1PK = 'P#<pid>#CAT#<category>'` | GSI1 |
-| Find topic by sha256 | `PK = 'P#<pid>#TOPIC'` + FilterExpression on `sha256` | Table |
-| List all categories | `PK = 'P#<pid>#CAT'` | Table |
+| List chunks for project | `PK = 'P#<pid>#CHUNK'` | Table |
+| List chunks by document | `GSI1PK = 'P#<pid>#DOCCHUNKS#<docId>'` | GSI1 |
 | Get cached embedding | `PK = 'EMBED', SK = 'EMBED#<sha256>'` | Table |
 
 ## Entity Relationships
@@ -118,16 +108,14 @@ Project
   ├── Documents (many)
   │     PK: P#<pid>#DOC
   │     GSI1: lookup by URL hash
-  ├── Topics (many)
-  │     PK: P#<pid>#TOPIC
-  │     GSI1: grouped by category
-  │     References Documents via doc_ids[]
-  ├── Replaced Topics (many)
-  │     PK: P#<pid>#REPLACED
-  │     Points to replacement via replacement_topic_id
-  └── Categories (many)
-        PK: P#<pid>#CAT
-        Tracks topicCount per category
+  ├── Chunks (many)
+  │     PK: P#<pid>#CHUNK
+  │     GSI1: grouped by source document
+  │     References Document via docId
+  ├── Scrape Jobs (many)
+  │     PK: P#<pid>#SCRAPE
+  └── Process Jobs (many)
+        PK: P#<pid>#PQUEUE
 
 Embedding Cache (global)
       PK: EMBED

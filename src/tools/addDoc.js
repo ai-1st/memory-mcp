@@ -2,7 +2,7 @@ import { processDocument } from '../lib/processor.js';
 
 export const addDoc = {
   name: 'add_doc',
-  description: 'Add a document and automatically extract how-to procedures from it',
+  description: 'Add a document and automatically generate chunks from it for retrieval',
   inputSchema: {
     type: 'object',
     properties: {

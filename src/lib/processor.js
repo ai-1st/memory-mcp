@@ -1,136 +1,98 @@
 import crypto from 'crypto';
 import { ulid } from 'ulid';
-import { putDoc, updateDocStats, putTopic, getTopic, replaceTopic, incrementCategory, getProject, getLatestDocByUrl } from './db.js';
-import { generateEmbedding, putVector, deleteVector, findSimilarByEmbedding } from './embeddings.js';
-import { extractHowTos, classifyHowToAction } from './ai.js';
+import { putDoc, updateDoc, putChunk, deleteChunksByDoc, getProject, getLatestDocByUrl, listChunksByDoc } from './db.js';
+import { generateEmbedding, putVector, deleteVectorsByDoc } from './embeddings.js';
+import { generateChunks } from './ai.js';
+
+function debug(msg, extra = {}) {
+  console.log(JSON.stringify({ ts: Date.now(), debug: msg, ...extra }));
+}
 
 function sha256(text) {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
-async function processEntry(projectId, docId, { category, title, body }, categorizationRules = '') {
-  const textToEmbed = `${title}\n\n${body}`;
-  const hash = sha256(textToEmbed);
-
-  const embedding = await generateEmbedding(textToEmbed, hash);
-  const similar = await findSimilarByEmbedding(projectId, embedding, 10);
-  const action = await classifyHowToAction(body, category, title, similar, categorizationRules);
-
-  const topicId = ulid();
-
-  if (action.action === 'REPLACE' && action.replaceIds.length > 0) {
-    const allDocIds = new Set([docId]);
-    const categoryDeltas = {};
-
-    for (const oldId of action.replaceIds) {
-      const oldTopic = await getTopic(projectId, oldId);
-      if (oldTopic) {
-        for (const did of (oldTopic.doc_ids || [])) allDocIds.add(did);
-        await replaceTopic(projectId, oldId, topicId);
-        await deleteVector(projectId, oldId);
-        const oldCat = oldTopic.category;
-        categoryDeltas[oldCat] = (categoryDeltas[oldCat] || 0) - 1;
-      }
-    }
-
-    const mergedText = `${action.title}\n\n${action.summary}`;
-    const newHash = sha256(mergedText);
-    const newEmbedding = await generateEmbedding(mergedText, newHash);
-
-    const topic = {
-      id: topicId,
-      category: action.category,
-      title: action.title,
-      summary: action.summary,
-      doc_ids: [...allDocIds],
-      sha256: newHash,
-    };
-
-    await putTopic(projectId, topic);
-    await putVector(projectId, topicId, {
-      id: topicId, category: action.category, title: action.title,
-      summary: action.summary, doc_ids: [...allDocIds], embedding: newEmbedding,
-    });
-
-    categoryDeltas[action.category] = (categoryDeltas[action.category] || 0) + 1;
-    for (const [cat, delta] of Object.entries(categoryDeltas)) {
-      if (delta !== 0) await incrementCategory(projectId, cat, delta);
-    }
-
-    return {
-      action: 'REPLACE', topicId, category: action.category,
-      title: action.title, summary: action.summary, replaced: action.replaceIds,
-    };
-  } else {
-    const topic = {
-      id: topicId, category: action.category, title: action.title,
-      summary: body, doc_ids: [docId], sha256: hash,
-    };
-
-    await putTopic(projectId, topic);
-    await putVector(projectId, topicId, {
-      id: topicId, category: action.category, title: action.title,
-      summary: body, doc_ids: [docId], embedding,
-    });
-    await incrementCategory(projectId, action.category, 1);
-
-    return {
-      action: 'ADD', topicId, category: action.category,
-      title: action.title, summary: body,
-    };
-  }
-}
-
 /**
- * Process a document end-to-end: dedup, store, extract, embed, classify.
- * Shared by Admin API POST /documents and ProcessWorker.
+ * Process a document end-to-end: dedup, store, chunk, embed.
+ * Documents are unique by URL within a project. If a document with the same URL
+ * already exists, it is updated in place rather than creating a duplicate.
  */
 export async function processDocument(projectId, { url, contents, title = '', force = false }) {
+  const docStart = Date.now();
   const contentsSha256 = sha256(contents);
 
-  if (!force) {
-    const existing = await getLatestDocByUrl(projectId, url);
-    if (existing && existing.contentsSha256 === contentsSha256) {
-      return {
-        docId: existing.id, url, skipped: true,
-        reason: 'Content unchanged since last ingestion',
-        topicsCreated: existing.topicsCreated ?? 0,
-        topicsReplaced: existing.topicsReplaced ?? 0,
-      };
+  const existing = await getLatestDocByUrl(projectId, url);
+
+  if (!force && existing && existing.contentsSha256 === contentsSha256) {
+    return {
+      docId: existing.id, url, skipped: true,
+      reason: 'Content unchanged since last ingestion',
+      chunksCreated: existing.chunksCreated ?? 0,
+    };
+  }
+
+  let docId;
+  if (existing) {
+    docId = existing.id;
+    await updateDoc(projectId, docId, { contents, contentsSha256, title });
+
+    const oldChunks = await listChunksByDoc(projectId, docId);
+    if (oldChunks.length > 0) {
+      await deleteVectorsByDoc(projectId, oldChunks.map(c => c.id));
+      await deleteChunksByDoc(projectId, docId);
+      debug('processDocument.cleanedOldChunks', { docId, count: oldChunks.length });
     }
+  } else {
+    docId = ulid();
+    await putDoc(projectId, { id: docId, url, title, contents, contentsSha256 });
   }
 
-  const docId = ulid();
   const project = await getProject(projectId);
-  const rules = project?.rules || '';
+  const chunkingPrompt = project?.prompts?.chunking || '';
 
-  await putDoc(projectId, { id: docId, url, title, contents, contentsSha256 });
+  const t0 = Date.now();
+  const { chunks } = await generateChunks(contents, url, chunkingPrompt);
+  debug('processDocument.generateChunks', { chunksCount: chunks.length, durationMs: Date.now() - t0 });
 
-  const { summary, howtos } = await extractHowTos(contents, url, rules);
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const chunkId = ulid();
+    const hash = sha256(chunk.content);
 
-  const entries = [
-    { category: summary.category, title: summary.title, body: summary.body },
-    ...howtos.map(h => ({
-      category: h.category,
-      title: h.title,
-      body: h.notes ? `${h.steps}\n\nNotes: ${h.notes}` : h.steps,
-    })),
-  ];
+    const embedding = await generateEmbedding(chunk.content, hash);
 
-  const results = [];
-  for (const entry of entries) {
-    results.push(await processEntry(projectId, docId, entry, rules));
+    await putChunk(projectId, {
+      id: chunkId,
+      type: chunk.type,
+      content: chunk.content,
+      docId,
+      sha256: hash,
+    });
+
+    await putVector(projectId, chunkId, {
+      type: chunk.type,
+      docId,
+      title: chunk.content.slice(0, 200),
+      summary: chunk.content.slice(0, 500),
+      embedding,
+    });
+
+    debug('processDocument.chunk', { index: i, type: chunk.type, chunkId });
   }
 
-  const topicsCreated = results.filter(r => r.action === 'ADD').length;
-  const topicsReplaced = results.filter(r => r.action === 'REPLACE').length;
+  const summaryChunk = chunks.find(c => c.type === 'summary');
+  await updateDoc(projectId, docId, {
+    chunksCreated: chunks.length,
+    summary: summaryChunk?.content || '',
+  });
 
-  await updateDocStats(projectId, docId, topicsCreated, topicsReplaced);
+  debug('processDocument.done', {
+    projectId, url, durationMs: Date.now() - docStart,
+    chunksCreated: chunks.length,
+  });
 
   return {
     docId, url, skipped: false,
-    topicsCreated, topicsReplaced,
-    howTosProcessed: results.length,
-    howtos: results,
+    chunksCreated: chunks.length,
   };
 }

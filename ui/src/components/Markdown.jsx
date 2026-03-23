@@ -1,8 +1,9 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-export default function Markdown({ children }) {
-  if (!children) return null;
+export default function Markdown({ children, text }) {
+  const content = children || text;
+  if (!content) return null;
 
   return (
     <div className="md-content">
@@ -14,7 +15,7 @@ export default function Markdown({ children }) {
           ),
         }}
       >
-        {children}
+        {content}
       </ReactMarkdown>
     </div>
   );

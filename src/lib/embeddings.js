@@ -1,145 +1,179 @@
-import { embed, cosineSimilarity } from 'ai';
+import crypto from 'crypto';
+import { embed } from 'ai';
 import { bedrock } from '@ai-sdk/amazon-bedrock';
 import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
-  ListObjectsV2Command,
-  DeleteObjectCommand,
-} from '@aws-sdk/client-s3';
+  S3VectorsClient,
+  PutVectorsCommand,
+  QueryVectorsCommand,
+  DeleteVectorsCommand,
+  ListVectorsCommand,
+} from '@aws-sdk/client-s3vectors';
 import { getCachedEmbedding, putCachedEmbedding } from './db.js';
 
-const s3 = new S3Client({});
-const BUCKET = process.env.VECTOR_BUCKET;
+const s3v = new S3VectorsClient({});
+const INDEX_ARN = process.env.VECTOR_INDEX;
 const EMBED_MODEL = bedrock.textEmbeddingModel('amazon.titan-embed-text-v2:0');
+
+function debug(msg, extra = {}) {
+  console.log(JSON.stringify({ ts: Date.now(), debug: msg, ...extra }));
+}
+
+function vecKey(projectId, chunkId) {
+  return `${projectId}#${chunkId}`;
+}
+
+function parseKey(key) {
+  const hash = key.indexOf('#');
+  return hash >= 0 ? key.slice(hash + 1) : key;
+}
 
 /**
  * Generate an embedding for text, using DDB cache keyed by sha256.
- * (Global — not project-scoped.)
  */
 export async function generateEmbedding(text, sha256) {
-  // Check cache first
+  const t0 = Date.now();
   const cached = await getCachedEmbedding(sha256);
-  if (cached) return cached;
+  if (cached) {
+    debug('embedding.cached', { durationMs: Date.now() - t0 });
+    return cached;
+  }
 
   const { embedding } = await embed({
     model: EMBED_MODEL,
     value: text,
   });
 
-  // Cache in DDB
   await putCachedEmbedding(sha256, embedding);
+  debug('embedding.created', { durationMs: Date.now() - t0 });
   return embedding;
 }
 
 /**
- * Store a topic's embedding vector in S3, scoped to project.
+ * Store a chunk's embedding vector in S3 Vectors.
  */
-export async function putVector(projectId, topicId, data) {
-  await s3.send(new PutObjectCommand({
-    Bucket: BUCKET,
-    Key: `vectors/${projectId}/${topicId}.json`,
-    Body: JSON.stringify(data),
-    ContentType: 'application/json',
+export async function putVector(projectId, chunkId, data) {
+  const embedding = data.embedding;
+  const float32 = Array.isArray(embedding) ? embedding : Array.from(embedding);
+
+  await s3v.send(new PutVectorsCommand({
+    indexArn: INDEX_ARN,
+    vectors: [{
+      key: vecKey(projectId, chunkId),
+      data: { float32 },
+      metadata: {
+        projectId,
+        type: data.type ?? '',
+        docId: data.docId ?? '',
+        title: data.title ?? '',
+        summary: data.summary ?? '',
+      },
+    }],
   }));
 }
 
 /**
- * Delete a topic's embedding vector from S3, scoped to project.
+ * Delete a chunk's embedding vector from S3 Vectors.
  */
-export async function deleteVector(projectId, topicId) {
-  await s3.send(new DeleteObjectCommand({
-    Bucket: BUCKET,
-    Key: `vectors/${projectId}/${topicId}.json`,
+export async function deleteVector(projectId, chunkId) {
+  await s3v.send(new DeleteVectorsCommand({
+    indexArn: INDEX_ARN,
+    keys: [vecKey(projectId, chunkId)],
   }));
 }
 
 /**
- * Load a single vector from S3.
+ * Delete vectors for all chunks belonging to a specific document.
  */
-async function getVector(key) {
-  try {
-    const { Body } = await s3.send(new GetObjectCommand({
-      Bucket: BUCKET,
-      Key: key,
+export async function deleteVectorsByDoc(projectId, chunkIds) {
+  if (chunkIds.length === 0) return 0;
+  const keys = chunkIds.map(id => vecKey(projectId, id));
+  let deleted = 0;
+  for (let i = 0; i < keys.length; i += 500) {
+    const batch = keys.slice(i, i + 500);
+    await s3v.send(new DeleteVectorsCommand({
+      indexArn: INDEX_ARN,
+      keys: batch,
     }));
-    const text = await Body.transformToString();
-    return JSON.parse(text);
-  } catch {
-    return null;
+    deleted += batch.length;
   }
+  return deleted;
 }
 
 /**
- * Load all vectors for a project from S3, returns array of {id, category, summary, embedding}.
+ * Find chunks similar to a given embedding vector, scoped to project.
  */
-async function loadAllVectors(projectId) {
-  const vectors = [];
-  let continuationToken;
+export async function findSimilarByEmbedding(projectId, embedding, topK = 10) {
+  const t0 = Date.now();
+  const float32 = Array.isArray(embedding) ? embedding : Array.from(embedding);
 
-  do {
-    const { Contents, NextContinuationToken } = await s3.send(
-      new ListObjectsV2Command({
-        Bucket: BUCKET,
-        Prefix: `vectors/${projectId}/`,
-        ContinuationToken: continuationToken,
-      })
-    );
+  const { vectors: results, distanceMetric } = await s3v.send(new QueryVectorsCommand({
+    indexArn: INDEX_ARN,
+    queryVector: { float32 },
+    topK,
+    filter: { projectId: { $eq: projectId } },
+    returnDistance: true,
+    returnMetadata: true,
+  }));
 
-    if (Contents) {
-      const results = await Promise.all(
-        Contents.map(({ Key }) => getVector(Key))
-      );
-      vectors.push(...results.filter(Boolean));
-    }
-
-    continuationToken = NextContinuationToken;
-  } while (continuationToken);
-
-  return vectors;
-}
-
-/**
- * Semantic search: embed query, load project vectors, return top-k by cosine similarity.
- */
-export async function searchSimilar(projectId, queryText, topK = 5) {
-  const { embedding: queryEmbedding } = await embed({
-    model: EMBED_MODEL,
-    value: queryText,
+  const similar = (results || []).map((v) => {
+    const meta = v.metadata || {};
+    const distance = v.distance ?? 1;
+    const score = distanceMetric === 'cosine' ? 1 - distance : 1 / (1 + distance);
+    return {
+      id: parseKey(v.key),
+      type: meta.type ?? '',
+      docId: meta.docId ?? '',
+      title: meta.title ?? '',
+      summary: meta.summary ?? '',
+      score,
+    };
   });
 
-  const allVectors = await loadAllVectors(projectId);
-  if (allVectors.length === 0) return [];
-
-  const scored = allVectors.map(v => ({
-    id: v.id,
-    category: v.category,
-    title: v.title,
-    summary: v.summary,
-    doc_ids: v.doc_ids || [],
-    score: cosineSimilarity(queryEmbedding, v.embedding),
-  }));
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topK);
+  debug('queryVectors', { projectId, resultCount: similar.length, durationMs: Date.now() - t0 });
+  return similar;
 }
 
 /**
- * Find entries similar to a given embedding vector, scoped to project.
+ * Semantic search: embed query, query S3 Vectors, return top-k by similarity.
  */
-export async function findSimilarByEmbedding(projectId, embedding, topK = 5) {
-  const allVectors = await loadAllVectors(projectId);
-  if (allVectors.length === 0) return [];
+export async function searchSimilar(projectId, queryText, topK = 5) {
+  const hash = crypto.createHash('sha256').update(queryText).digest('hex');
+  const queryEmbedding = await generateEmbedding(queryText, hash);
+  return findSimilarByEmbedding(projectId, queryEmbedding, topK);
+}
 
-  const scored = allVectors.map(v => ({
-    id: v.id,
-    category: v.category,
-    title: v.title,
-    summary: v.summary,
-    doc_ids: v.doc_ids || [],
-    score: cosineSimilarity(embedding, v.embedding),
-  }));
+/**
+ * Delete all vectors for a project from S3 Vectors.
+ */
+export async function deleteAllVectors(projectId) {
+  let deleted = 0;
+  let nextToken;
 
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topK);
+  do {
+    const { vectors = [], nextToken: nt } = await s3v.send(new ListVectorsCommand({
+      indexArn: INDEX_ARN,
+      maxResults: 1000,
+      returnMetadata: true,
+      nextToken,
+    }));
+
+    const keysToDelete = vectors
+      .filter((v) => (v.metadata?.projectId) === projectId)
+      .map((v) => v.key);
+
+    if (keysToDelete.length > 0) {
+      for (let i = 0; i < keysToDelete.length; i += 500) {
+        const batch = keysToDelete.slice(i, i + 500);
+        await s3v.send(new DeleteVectorsCommand({
+          indexArn: INDEX_ARN,
+          keys: batch,
+        }));
+        deleted += batch.length;
+      }
+    }
+
+    nextToken = nt;
+  } while (nextToken);
+
+  return deleted;
 }

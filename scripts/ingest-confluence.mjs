@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 
 /**
- * Ingest a Confluence page into Memory MCP.
+ * Ingest a single Confluence page into Memory MCP via Admin API.
  *
  * Usage:
  *   node scripts/ingest-confluence.mjs <confluence-url>
  *
  * Env vars:
  *   CONFLUENCE_EMAIL   - your Atlassian email
- *   CONFLUENCE_TOKEN   - API token from https://id.atlassian.com/manage-profile/security/api-tokens
- *   MCP_URL            - Memory MCP endpoint (defaults to the deployed Lambda)
- *   MCP_PROJECT_ID     - Project ID to ingest into (required)
+ *   CONFLUENCE_TOKEN   - API token
+ *   ADMIN_URL          - Admin API endpoint
+ *   PROJECT_ID         - Project ID to ingest into (required)
  */
 
-const MCP_URL = process.env.MCP_URL || 'https://u5atpeuk5f4aabdba6bvcp4jfm0bpepd.lambda-url.us-east-1.on.aws/';
+import { htmlToText } from '../src/lib/html.js';
 
 const url = process.argv[2];
 if (!url) {
@@ -23,19 +23,22 @@ if (!url) {
 
 const email = process.env.CONFLUENCE_EMAIL;
 const token = process.env.CONFLUENCE_TOKEN;
-const projectId = process.env.MCP_PROJECT_ID;
+const projectId = process.env.PROJECT_ID;
+const ADMIN_URL = process.env.ADMIN_URL;
+
 if (!email || !token) {
   console.error('Set CONFLUENCE_EMAIL and CONFLUENCE_TOKEN env vars.');
-  console.error('Get a token at: https://id.atlassian.com/manage-profile/security/api-tokens');
   process.exit(1);
 }
 if (!projectId) {
-  console.error('Set MCP_PROJECT_ID env var to the target project ID.');
+  console.error('Set PROJECT_ID env var.');
+  process.exit(1);
+}
+if (!ADMIN_URL) {
+  console.error('Set ADMIN_URL env var.');
   process.exit(1);
 }
 
-// Extract domain and page ID from URL
-// Handles: https://xxx.atlassian.net/wiki/spaces/SPACE/pages/12345/Title
 const match = url.match(/^(https:\/\/[^/]+)\/wiki\/.*\/pages\/(\d+)/);
 if (!match) {
   console.error('Could not parse Confluence URL. Expected format:');
@@ -45,7 +48,6 @@ if (!match) {
 
 const [, baseUrl, pageId] = match;
 
-// Fetch page content
 console.log(`Fetching page ${pageId} from ${baseUrl}...`);
 const apiUrl = `${baseUrl}/wiki/rest/api/content/${pageId}?expand=body.storage,metadata.labels`;
 const authHeader = 'Basic ' + Buffer.from(`${email}:${token}`).toString('base64');
@@ -56,59 +58,35 @@ const res = await fetch(apiUrl, {
 
 if (!res.ok) {
   console.error(`Confluence API error: ${res.status} ${res.statusText}`);
-  const body = await res.text();
-  console.error(body);
   process.exit(1);
 }
 
 const page = await res.json();
 const title = page.title;
 const html = page.body.storage.value;
-
-import { htmlToText } from '../src/lib/html.js';
-
 const text = htmlToText(html);
 
 console.log(`Title: ${title}`);
 console.log(`Content: ${text.length} chars`);
 
-// Send to Memory MCP
-console.log(`Sending to Memory MCP...`);
-const mcpRes = await fetch(MCP_URL, {
+console.log(`Sending to Admin API...`);
+const adminBase = ADMIN_URL.replace(/\/+$/, '');
+const docRes = await fetch(`${adminBase}/projects/${projectId}/documents`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'tools/call',
-    params: {
-      name: 'add_doc',
-      config: { projectId },
-      arguments: { url, contents: `# ${title}\n\n${text}` },
-    },
+    url,
+    title,
+    contents: `# ${title}\n\n${text}`,
   }),
 });
 
-const mcpJson = await mcpRes.json();
-const raw = mcpJson.result?.content?.[0]?.text || '';
+const result = await docRes.json();
 
-if (mcpJson.result?.isError || mcpJson.error) {
-  console.error('MCP error:', raw || mcpJson.error?.message);
-  process.exit(1);
-}
-
-let result;
-try {
-  result = JSON.parse(raw);
-} catch {
-  console.error('Unexpected response:', raw);
+if (!docRes.ok) {
+  console.error('Error:', result.error || 'Unknown error');
   process.exit(1);
 }
 
 console.log(`\nDoc ID: ${result.docId}`);
-const count = result.howTosProcessed || result.topicsProcessed || 0;
-console.log(`How-tos: ${count}`);
-const items = result.howtos || result.topics || [];
-for (const t of items) {
-  console.log(`  [${t.action}] ${t.category} - ${(t.title || t.summary || '').slice(0, 80)}...`);
-}
+console.log(`Chunks: ${result.chunksCreated || 0}`);
