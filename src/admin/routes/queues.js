@@ -119,7 +119,7 @@ export async function requeue({ params, body }) {
   const results = [];
   for (const jobId of ids) {
     try {
-      await updateProcessJob(projectId, jobId, { status: 'pending' });
+      await updateProcessJob(projectId, jobId, { status: 'pending', error: null });
       results.push({ jobId, status: 'requeued' });
     } catch (err) {
       results.push({ jobId, status: 'error', error: err.message });

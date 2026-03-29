@@ -1,7 +1,24 @@
 import { route } from './router.js';
+import { checkAuth, UNAUTHORIZED } from './auth.js';
+
+const CORS_HEADERS = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
 
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method || 'GET';
+
+  if (method === 'OPTIONS') {
+    return { statusCode: 204, headers: CORS_HEADERS };
+  }
+
+  if (process.env.ADMIN_SECRET_ARN) {
+    const authorized = await checkAuth(event);
+    if (!authorized) return UNAUTHORIZED;
+  }
+
   const path = event.rawPath || '/';
   const query = event.queryStringParameters || {};
 

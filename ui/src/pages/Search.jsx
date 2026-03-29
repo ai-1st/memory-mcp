@@ -61,15 +61,21 @@ export default function Search() {
         <>
           <div className="queue-panel">
             <h2>Documents ({documents.length})</h2>
-            <div className="doc-list">
+            <div className="search-doc-list">
               {documents.map(d => (
-                <Link key={d.id} to={`/document/${d.id}`} className="doc-list-row">
-                  <div className="doc-list-info">
-                    <span className="doc-list-title">{d.title || d.url || d.id}</span>
+                <div key={d.id} className="search-doc-card">
+                  <div className="search-doc-header">
+                    <Link to={`/document/${d.id}`} className="search-doc-title">{d.title || d.id}</Link>
+                    <span className="doc-list-chunks">{d.chunkCount} chunks</span>
+                    <span className="chunk-score">{(d.score / d.chunkCount * 100).toFixed(1)}% avg</span>
                   </div>
-                  <span className="doc-list-chunks">{d.chunkCount} chunks</span>
-                  <span className="chunk-score">{(d.score / d.chunkCount * 100).toFixed(1)}% avg</span>
-                </Link>
+                  {d.url && (
+                    <a className="search-doc-url" href={d.url} target="_blank" rel="noopener noreferrer">{d.url}</a>
+                  )}
+                  {d.summary && (
+                    <p className="search-doc-summary">{d.summary}</p>
+                  )}
+                </div>
               ))}
             </div>
           </div>

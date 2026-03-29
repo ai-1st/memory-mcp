@@ -21,6 +21,7 @@ export default function ProcessQueue() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [requeuing, setRequeueing] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const fetchData = useCallback(async () => {
     if (!projectId) return;
@@ -107,6 +108,21 @@ export default function ProcessQueue() {
     }
   }
 
+  async function handleRetryFailed() {
+    const count = processData?.failed ?? 0;
+    if (!count || retrying) return;
+    setRetrying(true);
+    try {
+      const res = await api.queueRequeue(projectId, { status: 'failed' });
+      showToast(`Retrying ${res.requeued} failed jobs`, 'success');
+      await handleRefresh();
+    } catch (err) {
+      showToast(err.message);
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   function handleFilterClick(newFilter) {
     const next = filter === newFilter ? null : newFilter;
     setFilter(next);
@@ -157,6 +173,11 @@ export default function ProcessQueue() {
         {(processData?.processing ?? 0) > 0 && (
           <button className="btn-sm btn-amber" onClick={handleRequeueStuck} disabled={requeuing} title="Reset stuck jobs (timed out) back to pending">
             {requeuing ? 'Requeueing...' : `Requeue ${processData.processing} stuck`}
+          </button>
+        )}
+        {(processData?.failed ?? 0) > 0 && (
+          <button className="btn-sm btn-red" onClick={handleRetryFailed} disabled={retrying} title="Re-queue all failed jobs for processing">
+            {retrying ? 'Retrying...' : `Retry ${processData.failed} failed`}
           </button>
         )}
       </div>

@@ -5,7 +5,7 @@ Description: Memory MCP Server
 Globals:
   Function:
     Timeout: 300
-    MemorySize: 512
+    MemorySize: 4096
     Runtime: nodejs22.x
     Architectures:
       - arm64
@@ -76,6 +76,7 @@ Resources:
           TABLE_NAME: !Ref MemoryMcpTable
           VECTOR_BUCKET: !Ref S3VectorsBucket
           VECTOR_INDEX: !Ref S3VectorsIndex
+          BM25_BUCKET: !Ref VectorBucket
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MemoryMcpTable
@@ -90,6 +91,15 @@ Resources:
               Action:
                 - bedrock:InvokeModel
               Resource: '*'
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub '${VectorBucket.Arn}/*'
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt VectorBucket.Arn
       FunctionUrlConfig:
         AuthType: NONE
         Cors:
@@ -111,17 +121,23 @@ Resources:
       Handler: admin/index.handler
       CodeUri: src/
       Timeout: 300
-      MemorySize: 512
       Environment:
         Variables:
           TABLE_NAME: !Ref MemoryMcpTable
           VECTOR_BUCKET: !Ref S3VectorsBucket
           VECTOR_INDEX: !Ref S3VectorsIndex
+          BM25_BUCKET: !Ref VectorBucket
           SCRAPE_WORKER_FN: !Ref ScrapeWorkerFunction
           PROCESS_WORKER_FN: !Ref ProcessWorkerFunction
+          ADMIN_SECRET_ARN: memory-mcp/admin-password
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MemoryMcpTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:memory-mcp/admin-password-*'
         - Statement:
             - Effect: Allow
               Action:
@@ -142,6 +158,17 @@ Resources:
               Resource:
                 - !GetAtt ScrapeWorkerFunction.Arn
                 - !GetAtt ProcessWorkerFunction.Arn
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+                - s3:DeleteObject
+              Resource: !Sub '${VectorBucket.Arn}/*'
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt VectorBucket.Arn
       FunctionUrlConfig:
         AuthType: NONE
         Cors:
@@ -165,7 +192,6 @@ Resources:
       Handler: workers/scrapeWorker.handler
       CodeUri: src/
       Timeout: 900
-      MemorySize: 512
       Environment:
         Variables:
           TABLE_NAME: !Ref MemoryMcpTable
@@ -189,13 +215,13 @@ Resources:
       Handler: workers/processWorker.handler
       CodeUri: src/
       Timeout: 900
-      MemorySize: 512
       ReservedConcurrentExecutions: 2
       Environment:
         Variables:
           TABLE_NAME: !Ref MemoryMcpTable
           VECTOR_BUCKET: !Ref S3VectorsBucket
           VECTOR_INDEX: !Ref S3VectorsIndex
+          BM25_BUCKET: !Ref VectorBucket
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MemoryMcpTable
@@ -217,6 +243,16 @@ Resources:
               Action:
                 - lambda:InvokeFunction
               Resource: '*'
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub '${VectorBucket.Arn}/*'
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt VectorBucket.Arn
 
 Outputs:
   McpServerUrl:
@@ -232,7 +268,7 @@ Outputs:
     Description: DynamoDB Table Name
     Value: !Ref MemoryMcpTable
   VectorBucket:
-    Description: Legacy S3 bucket (retained, unused)
+    Description: S3 bucket for BM25 indexes
     Value: !Ref VectorBucket
   S3VectorsBucket:
     Description: S3 Vectors bucket for similarity search

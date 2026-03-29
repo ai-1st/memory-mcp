@@ -1116,6 +1116,131 @@ a.job-title:hover {
   display: block;
 }
 
+/* ── BM25 Index Stats ── */
+.bm25-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+}
+.bm25-stat {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* ── Search doc results ── */
+
+.search-doc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-doc-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.search-doc-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.search-doc-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-doc-title:hover {
+  text-decoration: underline;
+}
+
+.search-doc-url {
+  display: block;
+  font-size: 11px;
+  color: var(--text-2);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.search-doc-url:hover {
+  color: var(--accent);
+}
+
+.search-doc-summary {
+  font-size: 12px;
+  color: var(--text-1);
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+/* ── Login ── */
+.login-backdrop {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-0);
+}
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 320px;
+  padding: 32px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.login-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.login-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.login-form input {
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-0);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.login-form input:focus { border-color: var(--accent); }
+.login-form .btn-primary { margin-top: 8px; }
+.login-error {
+  font-size: 13px;
+  color: var(--red);
+  font-weight: 500;
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .sidebar { width: 64px; min-width: 64px; padding: 16px 8px; }

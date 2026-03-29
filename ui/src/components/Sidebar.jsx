@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { api, getAdminEndpoint, setAdminEndpoint as saveAdminEndpoint } from '../lib/api';
+import { api, getAdminEndpoint, setAdminEndpoint as saveAdminEndpoint, getMcpEndpoint, setMcpEndpoint as saveMcpEndpoint } from '../lib/api';
 import { useApp } from '../lib/store';
 
 export default function Sidebar() {
@@ -8,6 +8,7 @@ export default function Sidebar() {
   const [projects, setProjects] = useState([]);
   const [endpointOpen, setEndpointOpen] = useState(false);
   const [adminVal, setAdminVal] = useState(getAdminEndpoint());
+  const [mcpVal, setMcpVal] = useState(getMcpEndpoint());
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -49,9 +50,11 @@ export default function Sidebar() {
 
   function handleEndpointSave() {
     const admin = adminVal.trim();
+    const mcp = mcpVal.trim();
     if (admin) saveAdminEndpoint(admin);
+    if (mcp) saveMcpEndpoint(mcp);
     setEndpointOpen(false);
-    showToast('Endpoint saved', 'success');
+    showToast('Endpoints saved', 'success');
     loadProjects();
   }
 
@@ -76,6 +79,9 @@ export default function Sidebar() {
       <nav className="nav">
         <NavLink to="/search" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
           <span className="nav-icon">&#8981;</span> Search
+        </NavLink>
+        <NavLink to="/bm25" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+          <span className="nav-icon">&#8984;</span> BM25 Search
         </NavLink>
         <NavLink to="/documents" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
           <span className="nav-icon">&#9776;</span> Documents
@@ -108,6 +114,14 @@ export default function Sidebar() {
               onKeyDown={e => e.key === 'Enter' && handleEndpointSave()}
               placeholder="https://...lambda-url.../"
               autoFocus
+            />
+            <label className="endpoint-label">MCP Server</label>
+            <input
+              type="url"
+              value={mcpVal}
+              onChange={e => setMcpVal(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleEndpointSave()}
+              placeholder="https://...lambda-url.../"
             />
             <button className="btn-sm" onClick={handleEndpointSave}>Save</button>
           </div>

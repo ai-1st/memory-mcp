@@ -1,6 +1,7 @@
 import { ulid } from 'ulid';
 import { listProjects, getProject, putProject, updateProject as updateProjectData, deleteProject as deleteProjectData } from '../../lib/db.js';
 import { deleteAllVectors } from '../../lib/embeddings.js';
+import { deleteIndex as deleteBm25Index } from '../../lib/bm25.js';
 import { DEFAULT_CHUNKING_PROMPT } from '../../lib/ai.js';
 
 export async function list() {
@@ -75,6 +76,7 @@ export async function remove({ params }) {
   const [dbCounts, vectorsDeleted] = await Promise.all([
     deleteProjectData(projectId),
     deleteAllVectors(projectId),
+    deleteBm25Index(projectId),
   ]);
 
   return {

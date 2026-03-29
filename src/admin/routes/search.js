@@ -24,6 +24,7 @@ export async function search({ params, query }) {
       id,
       url: docDetails[i]?.url || '',
       title: docDetails[i]?.title || '',
+      summary: docDetails[i]?.summary || '',
       score: docScores[id].score,
       chunkCount: docScores[id].count,
     }))

@@ -3,6 +3,7 @@ import { ulid } from 'ulid';
 import { putDoc, updateDoc, putChunk, deleteChunksByDoc, getProject, getLatestDocByUrl, listChunksByDoc } from './db.js';
 import { generateEmbedding, putVector, deleteVectorsByDoc } from './embeddings.js';
 import { generateChunks } from './ai.js';
+import { addDocument as bm25AddDocument, saveWithRetry } from './bm25.js';
 
 function debug(msg, extra = {}) {
   console.log(JSON.stringify({ ts: Date.now(), debug: msg, ...extra }));
@@ -84,6 +85,10 @@ export async function processDocument(projectId, { url, contents, title = '', fo
   await updateDoc(projectId, docId, {
     chunksCreated: chunks.length,
     summary: summaryChunk?.content || '',
+  });
+
+  await saveWithRetry(projectId, (index) => {
+    bm25AddDocument(index, docId, contents);
   });
 
   debug('processDocument.done', {

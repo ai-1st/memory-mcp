@@ -1,8 +1,9 @@
 import { searchSimilar } from '../lib/embeddings.js';
+import { getDoc } from '../lib/db.js';
 
 export const semanticSearch = {
   name: 'semantic_search',
-  description: 'Search knowledge base chunks by semantic similarity to a query',
+  description: 'Search documents by semantic similarity to a query. Returns ranked documents with summaries.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -12,7 +13,7 @@ export const semanticSearch = {
       },
       limit: {
         type: 'number',
-        description: 'Maximum number of results to return (default: 5)',
+        description: 'Maximum number of documents to return (default: 5)',
       },
     },
     required: ['query'],
@@ -31,22 +32,33 @@ export const semanticSearch = {
   async execute(args, config) {
     const { query, limit = 5 } = args;
     const { projectId } = config;
-    const results = await searchSimilar(projectId, query, limit);
+    const chunks = await searchSimilar(projectId, query, limit * 10);
+
+    const docScores = {};
+    for (const chunk of chunks) {
+      if (!chunk.docId) continue;
+      if (!docScores[chunk.docId]) docScores[chunk.docId] = { score: 0, count: 0 };
+      docScores[chunk.docId].score += chunk.score;
+      docScores[chunk.docId].count++;
+    }
+
+    const docIds = Object.keys(docScores);
+    const docDetails = await Promise.all(docIds.map(id => getDoc(projectId, id)));
+    const documents = docIds
+      .map((id, i) => ({
+        id,
+        url: docDetails[i]?.url || '',
+        title: docDetails[i]?.title || '',
+        summary: docDetails[i]?.summary || '',
+        score: Math.round(docScores[id].score * 1000) / 1000,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
 
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify({
-          query,
-          results: results.map(r => ({
-            id: r.id,
-            type: r.type,
-            docId: r.docId,
-            title: r.title,
-            summary: r.summary,
-            score: Math.round(r.score * 1000) / 1000,
-          })),
-        }, null, 2),
+        text: JSON.stringify({ query, documents }, null, 2),
       }],
       isError: false,
     };

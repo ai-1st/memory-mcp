@@ -1,7 +1,6 @@
 import { semanticSearch } from './semanticSearch.js';
+import { bm25Search } from './bm25Search.js';
 import { getDocument } from './getDocument.js';
-import { listDocuments } from './listDocuments.js';
-import { listProjects } from './listProjects.js';
 
 /**
  * Registry of read-only MCP tools (agent-facing).
@@ -9,9 +8,8 @@ import { listProjects } from './listProjects.js';
  */
 export const tools = [
   semanticSearch,
+  bm25Search,
   getDocument,
-  listDocuments,
-  listProjects,
 ];
 
 export function getTool(name) {

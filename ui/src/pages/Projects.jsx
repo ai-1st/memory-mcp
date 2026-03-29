@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { api, getMcpConfig } from '../lib/api';
 import { useApp } from '../lib/store';
 
 export default function Projects() {
@@ -99,6 +99,13 @@ export default function Projects() {
     setEditPrompt('');
   }
 
+  function handleCopyMcpConfig(e, p) {
+    e.stopPropagation();
+    const config = getMcpConfig(p.id, p.name);
+    navigator.clipboard.writeText(JSON.stringify(config, null, 2));
+    showToast('MCP config copied to clipboard', 'success');
+  }
+
   return (
     <section className="view-section">
       <header className="view-header">
@@ -161,6 +168,13 @@ export default function Projects() {
                 <span className="project-row-ulid">{p.id}</span>
               </div>
               <div className="project-row-actions">
+                <button
+                  className="btn-copy-config"
+                  title="Copy MCP config JSON to clipboard"
+                  onClick={e => handleCopyMcpConfig(e, p)}
+                >
+                  MCP Config
+                </button>
                 <button
                   className="btn-sm"
                   title="Edit chunking prompt"
