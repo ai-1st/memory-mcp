@@ -242,8 +242,8 @@ export default function ScrapeQueue() {
                 <div key={j.id} className="job-row">
                   <StatusBadge status={j.status} />
                   <span className="job-source">{j.source}</span>
-                  <span className="job-title">
-                    {j.source === 'jira' ? j.config?.jql?.slice(0, 60) : j.config?.parentUrl?.split('/').pop()}
+                  <span className={`job-title${j.source === 'jira' ? ' job-title-full' : ''}`} title={j.source === 'jira' ? j.config?.jql : j.config?.parentUrl}>
+                    {j.source === 'jira' ? j.config?.jql : j.config?.parentUrl?.split('/').pop()}
                   </span>
                   <span className="job-count">{j.docsEnqueued} docs</span>
                   <span className="job-time">{timeAgo(j.updatedAt || j.createdAt)}</span>

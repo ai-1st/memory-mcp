@@ -1,34 +1,27 @@
 # Tutorial: memory-mcp
 
-This project builds a **Model Context Protocol (MCP)** server that functions as an intelligent *knowledge base* for AI agents. It automates the ingestion of documentation (from sources like Jira and Confluence) via an **Asynchronous Ingestion Pipeline**, uses an **AI Knowledge Processor** to distill raw text into structured "How-To" guides, and enables agents to query this memory using **Vector Search** and standard tools.
-
-
-**Source Repository:** [None](None)
+This project builds a **Model Context Protocol (MCP)** server that functions as an intelligent *knowledge base* for AI agents. It automates the ingestion of documentation (from sources like Jira and Confluence) via an **Asynchronous Ingestion Pipeline**, uses an **AI Knowledge Processor** to distill raw text into structured chunks, and enables agents to query this memory using **Vector Search**, **BM25 keyword search**, and standard tools.
 
 ```mermaid
 flowchart TD
-    A0["MCP Protocol Layer
-"]
-    A1["AI Knowledge Processor
-"]
-    A2["Asynchronous Ingestion Pipeline
-"]
-    A3["Vector Search System
-"]
-    A4["Single-Table Data Access
-"]
-    A5["Tool Registry
-"]
-    A6["Admin REST API
-"]
+    A0["MCP Protocol Layer"]
+    A5["Tool Registry"]
+    A3["Vector Search System"]
+    A7["BM25 Search"]
+    A1["AI Knowledge Processor"]
+    A2["Asynchronous Ingestion Pipeline"]
+    A4["Single-Table Data Access"]
+    A6["Admin REST API"]
     A0 -- "Routes requests to" --> A5
     A5 -- "Retrieves data from" --> A4
     A5 -- "Performs semantic search via" --> A3
-    A5 -- "Triggers document processin..." --> A1
+    A5 -- "Performs keyword search via" --> A7
     A6 -- "Enqueues scrape jobs in" --> A2
-    A2 -- "Delegates content processin..." --> A1
-    A1 -- "Generates and stores embedd..." --> A3
-    A1 -- "Persists extracted topics to" --> A4
+    A2 -- "Delegates content processing to" --> A1
+    A1 -- "Generates and stores embeddings in" --> A3
+    A1 -- "Updates BM25 index in" --> A7
+    A1 -- "Persists documents and chunks to" --> A4
+    A7 -- "Stores indexes in" --> S3["S3 Bucket"]
 ```
 
 ## Chapters

@@ -84,20 +84,21 @@ This is the function that actually runs. It takes the arguments provided by the 
 
 ## Concept 2: The Registry (The Menu)
 
-Now that we have one tool, we might have many others (like `list_topics` or `rebuild_site`). We need a central place to list them all.
+Now that we have one tool, we need a central place to list all available tools.
 
 This is handled in `src/tools/index.js`.
 
 ```javascript
 // src/tools/index.js
+import { semanticSearch } from './semanticSearch.js';
+import { bm25Search } from './bm25Search.js';
 import { getDocument } from './getDocument.js';
-import { listTopics } from './listTopics.js';
-// ... import other tools ...
 
 // 1. The Master List
 export const tools = [
+  semanticSearch,
+  bm25Search,
   getDocument,
-  listTopics,
 ];
 ```
 
@@ -185,39 +186,61 @@ export async function handleCall(params, id) {
 
 ---
 
-## Example: A "List Topics" Tool
+## Example: The `bm25_search` Tool
 
-Let's look at one more example to see the pattern repeated. This tool lists categories.
+Let's look at a second tool to see the pattern repeated. This tool performs keyword search using the BM25 ranking algorithm.
 
 ```javascript
-// src/tools/listTopics.js
-export const listTopics = {
-  name: 'list_topics',
-  description: 'List all topics in a category',
+// src/tools/bm25Search.js
+import { loadIndex, search } from '../lib/bm25.js';
+import { getDoc } from '../lib/db.js';
+
+export const bm25Search = {
+  name: 'bm25_search',
+  description: 'Search documents by keyword matching using BM25 ranking.',
   inputSchema: {
     type: 'object',
     properties: {
-      category: { type: 'string' },
+      query: { type: 'string', description: 'The search query text' },
+      limit: { type: 'number', description: 'Max results (default: 10)' },
     },
-    required: ['category'],
+    required: ['query'],
   },
-  
-  async execute(args) {
-    // Logic to find topics...
-    const result = ["Coding", "Cooking"]; 
-    
+  configSchema: {
+    type: 'object',
+    properties: {
+      projectId: { type: 'string', description: 'The project ID' },
+    },
+    required: ['projectId'],
+  },
+
+  async execute(args, config) {
+    const { query, limit = 10 } = args;
+    const { index } = await loadIndex(config.projectId);
+    const hits = search(index, query, limit);
+    // Enrich with document details from DynamoDB...
     return {
-      content: [{ type: 'text', text: JSON.stringify(result) }],
+      content: [{ type: 'text', text: JSON.stringify({ query, documents: hits }) }],
       isError: false,
     };
   },
 };
 ```
 
-You can see the pattern is identical:
-1.  Define the schema.
+The pattern is identical to `get_document`:
+1.  Define the schema (including `configSchema` for project scoping).
 2.  Define the `execute` function.
 3.  Add it to the registry array in `index.js`.
+
+The MCP server exposes exactly **three tools**:
+
+| Tool | Purpose |
+|------|---------|
+| `semantic_search` | Vector similarity search, returns ranked documents |
+| `bm25_search` | Keyword/lexical search, returns ranked documents |
+| `get_document` | Retrieve full document contents by ID |
+
+Both search tools return the same shape: `{ query, documents: [{ id, url, title, summary, score }] }`. The caller picks the search method, then uses `get_document` to drill into specific results.
 
 ---
 
@@ -225,17 +248,13 @@ You can see the pattern is identical:
 
 In this chapter, we created the "Menu" of capabilities for our AI agent.
 
-1.  **Tool Definition:** We wrapped our code in an object with a `name`, `description`, and `inputSchema`.
+1.  **Tool Definition:** We wrapped our code in an object with a `name`, `description`, `inputSchema`, and optional `configSchema`.
 2.  **Tool Registry:** We created a central list (`tools/index.js`) to manage all available tools.
 3.  **Execution:** We wired up the Router to find a tool and run its `execute` function.
 
-**But wait...**
-In our examples, we faked the data:
-`const doc = { id, title: "My Note" };`
+The server currently provides three tools: `semantic_search` (vector similarity), `bm25_search` (keyword matching), and `get_document` (full document retrieval). The `configSchema` with `projectId` scopes every tool call to a specific project.
 
-In a real application, we need to fetch this from a database or a smart storage system. We need a brain to manage this information.
-
-In the next chapter, we will build the system that actually retrieves this data.
+In the next chapter, we will build the system that processes raw documents into searchable chunks.
 
 [Next Chapter: AI Knowledge Processor](03_ai_knowledge_processor_.md)
 

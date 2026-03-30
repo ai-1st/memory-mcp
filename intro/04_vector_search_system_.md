@@ -62,27 +62,27 @@ export async function generateEmbedding(text) {
 
 ---
 
-## Concept 2: The Bookshelf (S3 Storage)
+## Concept 2: The Bookshelf (S3 Vectors)
 
-Once we turn a document into a list of numbers, we need to save it. Since these are just JSON lists, we can store them as simple files in AWS S3.
-
-We organize them by Project ID so we don't mix up different users' data.
+Once we turn a chunk into a list of numbers, we need to save it. We use **AWS S3 Vectors**, a managed vector storage service that handles indexing and similarity queries natively.
 
 ```javascript
 // src/lib/embeddings.js
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-const s3 = new S3Client({});
+import { S3VectorsClient, PutVectorsCommand } from '@aws-sdk/client-s3vectors';
+const s3v = new S3VectorsClient({});
 
-export async function putVector(projectId, topicId, data) {
-  // Save the vector to a file path like: vectors/project-1/topic-5.json
-  await s3.send(new PutObjectCommand({
-    Bucket: process.env.VECTOR_BUCKET,
-    Key: `vectors/${projectId}/${topicId}.json`,
-    Body: JSON.stringify(data), // Save the numbers + metadata
+export async function putVector(projectId, chunkId, data) {
+  await s3v.send(new PutVectorsCommand({
+    indexArn: process.env.VECTOR_INDEX,
+    vectors: [{
+      key: `${projectId}#${chunkId}`,
+      data: { float32: data.embedding },
+      metadata: { projectId, docId: data.docId, type: data.type },
+    }],
   }));
 }
 ```
-*Explanation:* We act like a librarian placing a card in a catalog. The `Key` is the shelf location.
+*Explanation:* Unlike raw S3 files, S3 Vectors handles the similarity math for us. We store the vector with metadata, and the service indexes it automatically.
 
 ---
 
@@ -103,113 +103,80 @@ To search, we:
 
 ## Under the Hood: The Search Flow
 
-Let's visualize what happens when a user runs a search.
+Let's visualize what happens when a user runs a semantic search.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant S as Search Function
     participant AI as Embedding Model
-    participant S3 as AWS S3 Bucket
+    participant S3V as S3 Vectors
 
     User->>S: "My screen is black"
     S->>AI: generateEmbedding("My screen is black")
     AI-->>S: Returns Vector [0.5, 0.2...]
     
-    S->>S3: List all vectors for this project
-    S3-->>S: Returns 100 existing vectors
+    S->>S3V: QueryVectors(vector, projectId filter)
+    S3V-->>S: Returns top-K matching chunks with scores
     
-    S->>S: Calculate Score for each
-    S->>S: Sort by highest score
-    
-    S-->>User: Return top 5 matches
+    S->>S: Aggregate chunk scores by document
+    S-->>User: Return ranked documents
 ```
 
 ### Implementing the Search
 
-Let's look at `src/lib/embeddings.js` to see how we implement this logic.
-
-**Step 1: Load the Data**
-First, we need a helper to pull all the vectors from S3.
-
-```javascript
-// src/lib/embeddings.js (Helper)
-async function loadAllVectors(projectId) {
-  // 1. Get list of files in the project folder
-  const { Contents } = await s3.send(new ListObjectsV2Command({
-    Bucket: BUCKET,
-    Prefix: `vectors/${projectId}/`,
-  }));
-
-  // 2. Download and parse each file
-  // (In a real production app, we would use a Vector Database like Pinecone, 
-  // but for simple apps, S3 works fine!)
-  const results = await Promise.all(
-    Contents.map(({ Key }) => getVector(Key))
-  );
-  return results;
-}
-```
-
-**Step 2: The Search Function**
-Now we combine the Embedding generation and the Math.
+With S3 Vectors, the similarity math is handled by the service. We just embed the query and send it.
 
 ```javascript
 // src/lib/embeddings.js
-import { cosineSimilarity } from 'ai';
-
 export async function searchSimilar(projectId, queryText, topK = 5) {
-  // 1. Convert the USER'S query into numbers
-  const { embedding: queryEmbedding } = await embed({
-    model: EMBED_MODEL,
-    value: queryText,
-  });
+  // 1. Convert query to numbers
+  const embedding = await generateEmbedding(queryText);
 
-  // 2. Get all our stored documents
-  const allVectors = await loadAllVectors(projectId);
-
-  // 3. Score them!
-  const scored = allVectors.map(v => ({
-    ...v,
-    score: cosineSimilarity(queryEmbedding, v.embedding),
+  // 2. Query S3 Vectors with project filter
+  const { vectors } = await s3v.send(new QueryVectorsCommand({
+    indexArn: INDEX_ARN,
+    queryVector: { float32: embedding },
+    topK,
+    filter: { projectId: { $eq: projectId } },
   }));
 
-  // 4. Sort: Highest score first. Return top K results.
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topK);
+  // 3. Return results with scores
+  return vectors.map(v => ({
+    id: parseChunkId(v.key),
+    docId: v.metadata.docId,
+    score: 1 - v.distance, // cosine distance → similarity
+  }));
 }
 ```
 
-*Explanation:*
-1.  **Embed:** Turn the question into numbers.
-2.  **Load:** Fetch the library.
-3.  **Map:** Attach a "score" to every document using `cosineSimilarity`.
-4.  **Sort:** Put the best matches at the top.
+### Document-Level Aggregation
+
+The `semantic_search` MCP tool aggregates chunk results into **document-level** results. Multiple chunks from the same document have their scores summed, and the top documents are returned with their summaries.
 
 ---
 
-## Connecting it to the Admin API
+## BM25: The Keyword Complement
 
-We want to test this easily. In `src/admin/routes/search.js`, we expose this functionality via a simple web request.
+Vector search finds documents by meaning, but sometimes you want exact keyword matching (e.g., searching for a server name like `care-usw2-prod-004`). The system also provides **BM25 search** as a complement.
+
+BM25 is a classic information retrieval algorithm that ranks documents by term frequency. The BM25 index is:
+*   Stored as a gzip-compressed JSON file in S3 (one per project).
+*   Updated incrementally during document processing.
+*   Loaded on demand for search queries.
 
 ```javascript
-// src/admin/routes/search.js
-import { searchSimilar } from '../../lib/embeddings.js';
-
-export async function search({ params, query }) {
-  const [projectId] = params;
-  
-  // Run the logic we just wrote
-  const results = await searchSimilar(projectId, query.q, 5);
-
-  return { 
-    statusCode: 200, 
-    body: { results } 
-  };
+// src/lib/bm25.js (simplified)
+export function search(index, queryText, k = 10) {
+  const queryTokens = tokenize(queryText);
+  // Score each document using BM25 formula (k1=1.5, b=0.75)
+  // Return top-k documents sorted by score
 }
 ```
 
-Now, if we visit `GET /admin/projects/123/search?q=screen+broken`, we get back a JSON list of relevant documents, even if they don't say "broken."
+The MCP server exposes both search modes as separate tools:
+*   `semantic_search` — finds documents by meaning.
+*   `bm25_search` — finds documents by exact keywords.
 
 ---
 
@@ -217,14 +184,15 @@ Now, if we visit `GET /admin/projects/123/search?q=screen+broken`, we get back a
 
 In this chapter, we gave our application the ability to understand **Meaning**, not just keywords.
 
-1.  **Embedding:** We used an AI model to turn text into coordinate lists.
-2.  **Storage:** We stored these lists in S3 files.
-3.  **Search:** We compared the user's question coordinates with our file coordinates to find the closest matches.
+1.  **Embedding:** We used an AI model (Bedrock Titan) to turn text into coordinate lists.
+2.  **Storage:** We stored these vectors in S3 Vectors, a managed similarity search service.
+3.  **Search:** We query S3 Vectors to find chunks with similar meaning, then aggregate to document-level results.
+4.  **BM25:** We added keyword search as a complement for exact term matching.
 
 **One missing piece:**
-We've been talking about "storing documents" and "Project IDs," but we haven't actually built the database that holds the *text* content (the title, the body, the author). We've only stored the *vectors* (the numbers).
+We've been talking about "storing documents" and "Project IDs," but we haven't built the database that holds the *text* content. We've only stored the vectors and the BM25 index.
 
-We need a fast, reliable database to store the actual content.
+We need a fast, reliable database to store the actual document content, chunks, and metadata.
 
 In the next chapter, we will build the **Single-Table Data Access** layer using DynamoDB.
 

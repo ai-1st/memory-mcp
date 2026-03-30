@@ -51,13 +51,13 @@ export async function* scrapeJira({ baseUrl, jql }) {
 
 ---
 
-## Concept 2: The Queue (The Conveyor Belt)
+## Concept 2: The Queue (DynamoDB + Lambda Invoke)
 
 Once we scrape a ticket, we don't process it immediately. AI processing takes time (seconds per document). If we scrape fast but process slow, we create a bottleneck.
 
-We use **AWS SQS (Simple Queue Service)** as a buffer.
-1.  **Scraper Worker:** Puts raw documents onto the conveyor belt (Queue).
-2.  **Process Worker:** Takes one item off the belt, runs the AI, and saves it.
+We use **DynamoDB** as the job queue and **direct Lambda invocation** for worker coordination.
+1.  **Scraper Worker:** Creates process job records in DynamoDB with status `pending`, then invokes the Process Worker Lambda asynchronously.
+2.  **Process Worker:** Claims pending jobs (conditional update to `processing`), runs the AI, and marks them `completed` or `failed`.
 
 This ensures that if the AI is slow, the scraper doesn't have to stop working.
 
@@ -120,74 +120,83 @@ sequenceDiagram
 
 ## Implementation Step 1: The Scrape Worker
 
-This worker is the "Foreman." It starts the job, fetches the raw data, and places orders on the queue.
+This worker is the "Foreman." It starts the job, fetches the raw data, and creates process jobs.
 
 It lives in `src/workers/scrapeWorker.js`.
 
 ```javascript
 // src/workers/scrapeWorker.js
 import { scrapeJira } from '../lib/scraper.js';
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
 export const handler = async (event) => {
-  // 1. Read instructions from the trigger event
-  const { projectId, jobId, config } = JSON.parse(event.Records[0].body);
+  const { projectId, jobId, config } = event;
 
-  // 2. Start the generator
+  // 1. Start the generator
   const scraper = scrapeJira(config);
 
   for await (const doc of scraper) {
-    // 3. Save raw doc to DB (Safety backup)
+    // 2. Save raw doc to DB
     const docId = await saveRawDocToDB(projectId, doc);
 
-    // 4. Send a message to the Queue: "Hey, process this Doc ID!"
-    await sqs.send(new SendMessageCommand({
-      QueueUrl: process.env.PROCESS_QUEUE_URL,
-      MessageBody: JSON.stringify({ projectId, docId })
-    }));
+    // 3. Create a process job in DynamoDB (status: pending)
+    await putProcessJob(projectId, { id: ulid(), docId, status: 'pending' });
   }
+
+  // 4. Invoke the Process Worker Lambda asynchronously
+  await lambda.send(new InvokeCommand({
+    FunctionName: process.env.PROCESS_WORKER_FN,
+    InvocationType: 'Event',
+    Payload: JSON.stringify({ projectId }),
+  }));
 };
 ```
 *Explanation:*
 1.  It wakes up when we tell it to start a job.
 2.  It loops through every ticket found in Jira.
-3.  It **does not** run the AI. It just puts a message in SQS saying "Ready for processing." This keeps the scraper fast.
+3.  It creates pending process jobs in DynamoDB, then triggers the Process Worker Lambda.
 
 ---
 
 ## Implementation Step 2: The Process Worker
 
-This worker is the "Specialist." It sits at the end of the conveyor belt. It wakes up only when SQS gives it a message.
+This worker is the "Specialist." It claims pending jobs from DynamoDB and processes them.
 
 It lives in `src/workers/processWorker.js`.
 
 ```javascript
 // src/workers/processWorker.js
 import { processDocument } from '../lib/processor.js';
-import { getDoc } from '../lib/db.js';
 
 export const handler = async (event) => {
-  // 1. Loop through messages from SQS
-  for (const record of event.Records) {
-    const { projectId, docId } = JSON.parse(record.body);
+  const { projectId } = event;
 
-    // 2. Fetch the raw content we saved earlier
-    const doc = await getDoc(projectId, docId);
+  // 1. List pending jobs and claim them (conditional update)
+  const jobs = await listAndClaimJobs(projectId, concurrency);
 
-    // 3. Run the AI Brain (From Chapter 3)
+  // 2. Process each claimed job in parallel
+  await Promise.all(jobs.map(async (job) => {
+    const doc = await getDoc(projectId, job.docId);
+    
+    // 3. Run the AI Brain + BM25 indexing (From Chapter 3)
     await processDocument(projectId, {
       url: doc.url,
       contents: doc.contents
     });
     
-    console.log(`Finished processing ${doc.title}`);
+    await updateProcessJob(projectId, job.id, { status: 'completed' });
+  }));
+
+  // 4. If more pending jobs exist, re-invoke self
+  if (morePending) {
+    await lambda.send(new InvokeCommand({ ... }));
   }
 };
 ```
 *Explanation:*
-1.  This function is triggered automatically by AWS whenever the queue has items.
-2.  It reuses the logic we wrote in [AI Knowledge Processor](03_ai_knowledge_processor_.md).
-3.  Because this runs on many parallel Lambda functions, we can process 100 tickets at the same time!
+1.  The worker claims jobs using a DynamoDB conditional update (only if `status === 'pending'`), preventing duplicate processing.
+2.  It reuses the logic we wrote in [AI Knowledge Processor](03_ai_knowledge_processor_.md), which now also updates the BM25 index.
+3.  With `ReservedConcurrentExecutions: 2`, up to 2 workers run in parallel. Each processes multiple jobs concurrently.
 
 ---
 
@@ -219,8 +228,8 @@ export async function updateScrapeJob(projectId, jobId, updates) {
 In this chapter, we turned our single-player application into a factory.
 
 1.  **Generators:** We used `yield` to handle large streams of data from Jira/Confluence.
-2.  **Queues:** We used SQS to decouple "finding work" (scraping) from "doing work" (processing).
-3.  **Workers:** We built background functions that run automatically to handle the load.
+2.  **Job Queue:** We used DynamoDB to track job status and direct Lambda invocation for worker coordination.
+3.  **Workers:** We built background Lambda functions with concurrency control and self-reinvocation for long-running batches.
 
 Now our system is powerful, smart, and scalable. But currently, the only way to trigger these jobs is by manually invoking code. We need a control panel.
 

@@ -168,55 +168,64 @@ sequenceDiagram
 
 Sometimes, things go wrong. Maybe the AI API was down, and 50 jobs failed. We need a way to **Retry** them.
 
-This logic lives in `src/admin/routes/queues.js`.
+The UI provides two recovery buttons:
+*   **Requeue Stuck** — for jobs stuck in `processing` (worker crashed or timed out).
+*   **Retry Failed** — for jobs that errored out during processing.
 
 ```javascript
 // src/admin/routes/queues.js
 export async function requeue({ params, body }) {
   const [projectId] = params;
-  const { jobIds } = body; // List of failed IDs
+  const { jobIds, status } = body; // Either specific IDs or a status filter
 
-  for (const jobId of jobIds) {
-    // 1. Reset status in DB to "Pending"
-    await updateProcessJob(projectId, jobId, { status: 'pending' });
-
-    // 2. Put it back on the conveyor belt (Queue)
-    await sqs.send(new SendMessageCommand({
-      QueueUrl: PROCESS_QUEUE_URL,
-      MessageBody: JSON.stringify({ projectId, jobId }),
-    }));
+  let ids = jobIds || [];
+  if (ids.length === 0 && status) {
+    ids = await listProcessJobIdsByStatus(projectId, status);
   }
 
-  return { statusCode: 200, body: { message: 'Jobs requeued' } };
+  for (const jobId of ids) {
+    await updateProcessJob(projectId, jobId, { status: 'pending', error: null });
+  }
+
+  // Invoke the process worker to pick up the requeued jobs
+  if (ids.length > 0) {
+    await invokeWorker(PROCESS_WORKER_FN, { projectId });
+  }
+
+  return { statusCode: 200, body: { requeued: ids.length } };
 }
 ```
-*Explanation:* We don't need to re-scrape the data. We just tell the database "Try again" and put the existing document ID back into the processing queue.
+*Explanation:* We reset the job status to `pending`, clear any error message, and invoke the Process Worker Lambda to pick them up.
 
 ---
 
-## Controlling Concurrency
+## BM25 Search Endpoints
 
-Another cool feature for admins is controlling how fast the system runs. If the database is getting overwhelmed, we might want to slow down the workers.
+The Admin API also exposes BM25 keyword search management:
 
-We can control AWS Lambda settings directly from our API!
+*   `GET /projects/:id/bm25?q=...` — Search documents by keywords.
+*   `GET /projects/:id/bm25/stats` — Index stats (document count, total words, compressed size).
+*   `POST /projects/:id/bm25/reindex` — Rebuild the entire BM25 index from all documents (one S3 write).
+
+The BM25 index is stored as a gzip-compressed JSON file in S3. The reindex endpoint loads all documents from DynamoDB in pages, builds the index in memory, and writes it in a single S3 operation.
+
+## Authentication
+
+The Admin API is protected by **HTTP Basic Auth**. Credentials are stored in AWS Secrets Manager and cached by the Lambda on cold start.
 
 ```javascript
-// src/admin/routes/queues.js
-export async function control({ body }) {
-  const { action, value } = body; // e.g. action="concurrency", value=5
+// src/admin/auth.js (simplified)
+export async function checkAuth(event) {
+  const header = event.headers?.authorization || '';
+  if (!header.startsWith('Basic ')) return false;
 
-  if (action === 'concurrency') {
-    // Tell AWS: Only run 5 workers at a time
-    await lambda.send(new UpdateEventSourceMappingCommand({
-      UUID: MAPPING_UUID,
-      ScalingConfig: { MaximumConcurrency: parseInt(value) },
-    }));
-  }
-
-  return { statusCode: 200, body: { success: true } };
+  const [user, pass] = atob(header.slice(6)).split(':');
+  const creds = await getCredentials(); // Cached from Secrets Manager
+  return user === creds.username && pass === creds.password;
 }
 ```
-*Explanation:* This effectively acts as a "Throttle" lever on our dashboard.
+
+The UI stores credentials in localStorage and sends the `Authorization` header with every request. If a 401 is returned, the login form is shown.
 
 ---
 
@@ -226,22 +235,15 @@ Congratulations! You have reached the end of the `memory-mcp` tutorial series. Y
 
 Let's recap what we built:
 
-1.  **[MCP Protocol Layer](01_mcp_protocol_layer_.md):** The "Front Door" that lets AI agents talk to our code.
-2.  **[Tool Registry](02_tool_registry_.md):** The "Menu" of capabilities (add_memory, search).
-3.  **[AI Knowledge Processor](03_ai_knowledge_processor_.md):** The "Brain" that cleans and organizes raw text.
-4.  **[Vector Search System](04_vector_search_system_.md):** The "Translator" that converts text to numbers to find meaning.
-5.  **[Single-Table Data Access](05_single_table_data_access_.md):** The "Filing Cabinet" that stores everything efficiently.
-6.  **[Asynchronous Ingestion Pipeline](06_asynchronous_ingestion_pipeline_.md):** The "Factory" that handles massive data imports in the background.
-7.  **[Admin REST API](07_admin_rest_api_.md):** The "Control Panel" for human administrators.
+1.  **[MCP Protocol Layer](01_mcp_protocol_layer_.md):** The "Front Door" that lets AI agents talk to our code via JSON-RPC.
+2.  **[Tool Registry](02_tool_registry_.md):** Three tools: `semantic_search`, `bm25_search`, and `get_document`.
+3.  **[AI Knowledge Processor](03_ai_knowledge_processor_.md):** The "Brain" that breaks documents into chunks, generates embeddings, and updates the BM25 index.
+4.  **[Vector Search System](04_vector_search_system_.md):** Semantic similarity via S3 Vectors, plus BM25 keyword search via a gzip-compressed JSON index in S3.
+5.  **[Single-Table Data Access](05_single_table_data_access_.md):** The "Filing Cabinet" using DynamoDB single-table design.
+6.  **[Asynchronous Ingestion Pipeline](06_asynchronous_ingestion_pipeline_.md):** The "Factory" using Lambda workers with DynamoDB job tracking and direct invocation.
+7.  **[Admin REST API](07_admin_rest_api_.md):** The "Control Panel" with Basic Auth, BM25 management, and job retry capabilities.
 
-You now have a system where an AI can say *"Read the documentation for Project X"*, and your server will scrape it, process it, index it, and make it searchable—all while giving you full control via a dashboard.
-
-**Where to go from here?**
-*   Build a React frontend to consume the API we just built.
-*   Add more tools to the Registry (e.g., "Summarize Project").
-*   Deploy the system to AWS using Terraform or CDK.
-
-Thank you for following along!
+You now have a system where an AI can say *"Search the documentation for Project X"*, using either semantic or keyword search, and your server will return ranked documents with summaries. The full pipeline—scraping, chunking, embedding, indexing—runs in the background with full visibility via the admin dashboard.
 
 ---
 

@@ -1031,6 +1031,12 @@ body {
   text-decoration: none;
 }
 
+.job-title.job-title-full {
+  white-space: normal;
+  word-break: break-word;
+  text-overflow: unset;
+}
+
 a.job-title:hover {
   color: var(--accent);
   text-decoration: underline;
