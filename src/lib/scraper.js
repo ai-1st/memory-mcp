@@ -85,20 +85,25 @@ export async function* scrapeJira({ baseUrl, email, token, jql }) {
 // ── Confluence ──
 
 /**
- * Scrape Confluence pages under a parent page (recursive).
+ * Scrape Confluence pages under a parent page or folder (recursive).
  * Yields { url, title, contents } for each page.
  */
 export async function* scrapeConfluence({ baseUrl, email, token, parentUrl }) {
   const authHeader = 'Basic ' + Buffer.from(`${email}:${token}`).toString('base64');
 
-  const urlMatch = parentUrl.match(/^(?:https:\/\/[^/]+)?\/wiki\/.*\/pages\/(\d+)/);
-  let parentPageId;
-  if (urlMatch) {
-    parentPageId = urlMatch[1];
+  let parentId;
+  let parentIsFolder = false;
+
+  const folderMatch = parentUrl.match(/\/(?:wiki\/)?spaces\/[^/]+\/folder\/(\d+)/)
+    || parentUrl.match(/\/folder\/(\d+)/);
+  if (folderMatch) {
+    parentId = folderMatch[1];
+    parentIsFolder = true;
   } else {
-    const directMatch = parentUrl.match(/\/pages\/(\d+)/);
-    if (directMatch) parentPageId = directMatch[1];
-    else throw new Error('Could not parse Confluence parent URL for page ID');
+    const pageMatch = parentUrl.match(/^(?:https:\/\/[^/]+)?\/wiki\/.*\/pages\/(\d+)/)
+      || parentUrl.match(/\/pages\/(\d+)/);
+    if (pageMatch) parentId = pageMatch[1];
+    else throw new Error('Could not parse Confluence URL — expected a /pages/ or /folder/ URL');
   }
 
   async function confluenceGet(path) {
@@ -141,18 +146,18 @@ export async function* scrapeConfluence({ baseUrl, email, token, parentUrl }) {
     };
   }
 
-  // Ingest parent page
-  const parentPage = await confluenceGet(
-    `/wiki/rest/api/content/${parentPageId}?expand=body.storage`
-  );
-  const parentDoc = makePage(parentPage);
-  if (parentDoc) yield parentDoc;
+  if (!parentIsFolder) {
+    const parentPage = await confluenceGet(
+      `/wiki/rest/api/content/${parentId}?expand=body.storage`
+    );
+    const parentDoc = makePage(parentPage);
+    if (parentDoc) yield parentDoc;
+  }
 
-  // Recursive walk
-  async function* walkPages(parentId) {
+  async function* walkPages(nodeId) {
     const [childPages, childFolders] = await Promise.all([
-      getChildren(parentId, 'page', 'body.storage'),
-      getChildren(parentId, 'folder'),
+      getChildren(nodeId, 'page', 'body.storage'),
+      getChildren(nodeId, 'folder'),
     ]);
 
     for (const folder of childFolders) {
@@ -166,5 +171,5 @@ export async function* scrapeConfluence({ baseUrl, email, token, parentUrl }) {
     }
   }
 
-  yield* walkPages(parentPageId);
+  yield* walkPages(parentId);
 }

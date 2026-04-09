@@ -204,9 +204,9 @@ export default function ScrapeQueue() {
             </div>
           ) : (
             <div className="form-row">
-              <label>Parent Page URL</label>
+              <label>Page or Folder URL</label>
               <input type="url" value={parentUrl} onChange={e => setParentUrl(e.target.value)}
-                placeholder="https://org.atlassian.net/wiki/spaces/SPACE/pages/123/Title" required />
+                placeholder="https://org.atlassian.net/wiki/spaces/SPACE/pages/123/Title or .../folder/456" required />
             </div>
           )}
 
