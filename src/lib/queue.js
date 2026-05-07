@@ -26,6 +26,7 @@ export async function putScrapeJob(projectId, job) {
     status: job.status || 'pending',
     docsFound: job.docsFound ?? 0,
     docsEnqueued: job.docsEnqueued ?? 0,
+    docsSkipped: job.docsSkipped ?? 0,
     error: job.error || null,
     createdAt: job.createdAt || now,
     updatedAt: now,
@@ -163,6 +164,53 @@ export async function listProcessJobs(projectId, { status, limit, afterSK } = {}
   const result = limit ? items.slice(0, limit) : items;
   const hasMore = limit ? items.length > limit || !!lastKey : false;
   return { items: result, hasMore };
+}
+
+// ── BM25 Index Queue ──
+
+export async function putBm25Job(projectId, { docId }) {
+  const now = new Date().toISOString();
+  await ddb.send(new UpdateCommand({
+    TableName: TABLE,
+    Key: { PK: `P#${projectId}#BM25QUEUE`, SK: `DOC#${docId}` },
+    UpdateExpression: 'SET docId = :docId, updatedAt = :now, createdAt = if_not_exists(createdAt, :now)',
+    ExpressionAttributeValues: {
+      ':docId': docId,
+      ':now': now,
+    },
+  }));
+}
+
+export async function listBm25Jobs(projectId, { limit } = {}) {
+  const { Items, LastEvaluatedKey } = await ddb.send(new QueryCommand({
+    TableName: TABLE,
+    KeyConditionExpression: 'PK = :pk',
+    ExpressionAttributeValues: { ':pk': `P#${projectId}#BM25QUEUE` },
+    ...(limit && { Limit: limit }),
+  }));
+  return {
+    items: Items || [],
+    hasMore: !!LastEvaluatedKey,
+  };
+}
+
+export async function deleteBm25Jobs(projectId, docIds) {
+  let deleted = 0;
+  for (let i = 0; i < docIds.length; i += 25) {
+    const batch = docIds.slice(i, i + 25);
+    if (batch.length === 0) continue;
+    await ddb.send(new BatchWriteCommand({
+      RequestItems: {
+        [TABLE]: batch.map(docId => ({
+          DeleteRequest: {
+            Key: { PK: `P#${projectId}#BM25QUEUE`, SK: `DOC#${docId}` },
+          },
+        })),
+      },
+    }));
+    deleted += batch.length;
+  }
+  return deleted;
 }
 
 // ── Aggregation ──

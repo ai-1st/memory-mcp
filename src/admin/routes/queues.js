@@ -41,7 +41,7 @@ export async function status({ params, query }) {
         stopped: scrapeStopped,
         jobs: filteredScrapeJobs.map(j => ({
           id: j.id, source: j.source, config: j.config, status: j.status,
-          docsFound: j.docsFound, docsEnqueued: j.docsEnqueued,
+          docsFound: j.docsFound, docsEnqueued: j.docsEnqueued, docsSkipped: j.docsSkipped ?? 0,
           hasCredentials: !!(j.credentials?.email && j.credentials?.token),
           error: j.error, createdAt: j.createdAt, updatedAt: j.updatedAt,
         })),

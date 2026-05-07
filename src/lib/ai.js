@@ -8,6 +8,13 @@ function debug(msg, extra = {}) {
 
 const MODEL = bedrock('us.anthropic.claude-haiku-4-5-20251001-v1:0');
 
+const MEANINGFUL_UPDATED_AT_PROMPT = `Also extract meaningfulUpdatedAt: the ISO date/time of the latest meaningful activity represented in the document.
+- Meaningful activity includes infrastructure changes, investigation findings, approvals, decisions, releases, deployments, incident updates, or resolutions.
+- Ignore bookkeeping-only changes such as labels, tags, watchers, formatting edits, automatic syncs, and metadata updates unless they clearly represent a real event.
+- Use only dates supported by the document text or source metadata included in the document.
+- If there is no explicit meaningful date, use the best supported source document date if available.
+- If no meaningful or source date is available, return null.`;
+
 const DEFAULT_CHUNKING_PROMPT = `You are processing a document for a retrieval-augmented generation (RAG) system. Your job is to break the document into chunks that will be embedded and used for semantic search.
 
 Produce three types of chunks:
@@ -22,9 +29,12 @@ Rules:
 - Every chunk must be self-contained — someone reading just that chunk should understand it without seeing the rest of the document
 - Include specific details: commands, file paths, URLs, config values, error messages, version numbers
 - Do NOT produce generic chunks that could apply to any document
-- Q&A questions should be phrased naturally, as a user would search for them`;
+- Q&A questions should be phrased naturally, as a user would search for them
+
+${MEANINGFUL_UPDATED_AT_PROMPT}`;
 
 const chunkSchema = z.object({
+  meaningfulUpdatedAt: z.string().nullable().describe('ISO date/time of the latest meaningful activity represented in the document, or null if unavailable.'),
   chunks: z.array(z.object({
     type: z.enum(['summary', 'qa', 'text']),
     content: z.string().describe('The chunk text with contextual preamble prepended.'),
@@ -36,7 +46,9 @@ const chunkSchema = z.object({
  * Uses the project's custom chunking prompt if set, otherwise the default.
  */
 export async function generateChunks(contents, url, customPrompt = '') {
-  const systemPrompt = customPrompt || DEFAULT_CHUNKING_PROMPT;
+  const systemPrompt = customPrompt
+    ? `${customPrompt}\n\n${MEANINGFUL_UPDATED_AT_PROMPT}`
+    : DEFAULT_CHUNKING_PROMPT;
 
   const t0 = Date.now();
   const { output, usage } = await generateText({

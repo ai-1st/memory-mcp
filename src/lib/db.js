@@ -274,6 +274,7 @@ export async function deleteProject(projectId) {
     `P#${projectId}#CHUNK`,
     `P#${projectId}#SCRAPE`,
     `P#${projectId}#PQUEUE`,
+    `P#${projectId}#BM25QUEUE`,
   ];
 
   const counts = {};

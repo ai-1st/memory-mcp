@@ -2,8 +2,22 @@ import { listDocs, getDoc, updateDoc, putChunk, deleteChunksByDoc, listChunksByD
 import { processDocument } from '../../lib/processor.js';
 import { generateChunks } from '../../lib/ai.js';
 import { generateEmbedding, putVector, deleteVectorsByDoc } from '../../lib/embeddings.js';
+import { putBm25Job } from '../../lib/queue.js';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import crypto from 'crypto';
 import { ulid } from 'ulid';
+
+const lambda = new LambdaClient({});
+const BM25_WORKER_FN = process.env.BM25_WORKER_FN;
+
+async function invokeBm25Worker(projectId) {
+  if (!BM25_WORKER_FN) return;
+  await lambda.send(new InvokeCommand({
+    FunctionName: BM25_WORKER_FN,
+    InvocationType: 'Event',
+    Payload: JSON.stringify({ projectId }),
+  }));
+}
 
 export async function list({ params, query }) {
   const [projectId] = params;
@@ -21,6 +35,7 @@ export async function list({ params, query }) {
         summary: d.summary || '',
         chunksCreated: d.chunksCreated,
         createdAt: d.createdAt,
+        meaningfulUpdatedAt: d.meaningfulUpdatedAt || null,
       })),
       hasMore,
       lastSK: docs.length > 0 ? docs[docs.length - 1].SK : null,
@@ -43,6 +58,7 @@ export async function get({ params }) {
       contents: doc.contents,
       chunksCreated: doc.chunksCreated,
       createdAt: doc.createdAt,
+      meaningfulUpdatedAt: doc.meaningfulUpdatedAt || null,
     },
   };
 }
@@ -53,6 +69,7 @@ export async function create({ params, body }) {
   if (!url || !contents) return { statusCode: 400, body: { error: 'url and contents are required' } };
 
   const result = await processDocument(projectId, { url, contents, title, force });
+  if (!result.skipped) await invokeBm25Worker(projectId);
   return { statusCode: 201, body: result };
 }
 
@@ -70,7 +87,7 @@ export async function reprocess({ params }) {
     await deleteChunksByDoc(projectId, docId);
   }
 
-  const { chunks } = await generateChunks(doc.contents, doc.url, chunkingPrompt);
+  const { chunks, meaningfulUpdatedAt = null } = await generateChunks(doc.contents, doc.url, chunkingPrompt);
 
   for (const chunk of chunks) {
     const chunkId = ulid();
@@ -98,10 +115,13 @@ export async function reprocess({ params }) {
   await updateDoc(projectId, docId, {
     chunksCreated: chunks.length,
     summary: summaryChunk?.content || '',
+    meaningfulUpdatedAt,
   });
+  await putBm25Job(projectId, { docId });
+  await invokeBm25Worker(projectId);
 
   return {
     statusCode: 200,
-    body: { docId, chunksCreated: chunks.length },
+    body: { docId, chunksCreated: chunks.length, meaningfulUpdatedAt },
   };
 }

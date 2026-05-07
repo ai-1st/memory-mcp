@@ -6,6 +6,7 @@ import { processDocument } from '../lib/processor.js';
 const lambda = new LambdaClient({});
 const PARALLELISM = 5;
 const MAX_RUNTIME_MS = 10 * 60 * 1000;
+const BM25_WORKER_FN = process.env.BM25_WORKER_FN;
 
 function debug(msg, extra = {}) {
   console.log(JSON.stringify({ ts: Date.now(), debug: msg, ...extra }));
@@ -21,7 +22,7 @@ async function processOneJob(projectId, job) {
       await updateProcessJob(projectId, job.id, {
         status: 'failed', error: 'Document not found',
       });
-      return;
+      return false;
     }
 
     const result = await processDocument(projectId, {
@@ -37,6 +38,7 @@ async function processOneJob(projectId, job) {
       projectId, jobId: job.id, durationMs: Date.now() - jobStart,
       chunksCreated: result.chunksCreated,
     });
+    return true;
   } catch (err) {
     debug('processJob.failed', {
       projectId, jobId: job.id, durationMs: Date.now() - jobStart,
@@ -46,7 +48,20 @@ async function processOneJob(projectId, job) {
     await updateProcessJob(projectId, job.id, {
       status: 'failed', error: err.message,
     });
+    return false;
   }
+}
+
+async function invokeBm25Worker(projectId) {
+  if (!BM25_WORKER_FN) {
+    debug('bm25Worker.notConfigured', { projectId });
+    return;
+  }
+  await lambda.send(new InvokeCommand({
+    FunctionName: BM25_WORKER_FN,
+    InvocationType: 'Event',
+    Payload: JSON.stringify({ projectId }),
+  }));
 }
 
 export const handler = async (event) => {
@@ -82,10 +97,13 @@ export const handler = async (event) => {
 
     const tasks = items.map(async (job) => {
       const claimed = await claimProcessJob(projectId, job.id);
-      if (!claimed) return;
-      await processOneJob(projectId, job);
+      if (!claimed) return false;
+      return processOneJob(projectId, job);
     });
 
-    await Promise.all(tasks);
+    const results = await Promise.all(tasks);
+    if (results.some(Boolean)) {
+      await invokeBm25Worker(projectId);
+    }
   }
 };

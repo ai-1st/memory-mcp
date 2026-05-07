@@ -49,6 +49,7 @@ export const getDocument = {
           contents: doc.contents,
           chunksCreated: doc.chunksCreated ?? 0,
           createdAt: doc.createdAt,
+          meaningfulUpdatedAt: doc.meaningfulUpdatedAt || null,
         }, null, 2),
       }],
       isError: false,

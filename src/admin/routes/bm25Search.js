@@ -1,5 +1,6 @@
 import { loadIndex, search, createIndex, addDocument, saveIndex } from '../../lib/bm25.js';
 import { getDoc, listDocs } from '../../lib/db.js';
+import { hasMeaningfulUpdateSince, parseMaxDaysSinceUpdated } from '../../lib/searchFilters.js';
 
 export async function bm25Search({ params, query }) {
   const [projectId] = params;
@@ -7,19 +8,25 @@ export async function bm25Search({ params, query }) {
   if (!q) return { statusCode: 400, body: { error: 'q query parameter is required' } };
 
   const limit = parseInt(query.limit, 10) || 10;
-  const { index } = await loadIndex(projectId);
-  const hits = search(index, q, limit);
+  const { cutoffMs, error } = parseMaxDaysSinceUpdated(query.maxDaysSinceUpdated);
+  if (error) return { statusCode: 400, body: { error } };
 
-  const documents = await Promise.all(hits.map(async (hit) => {
+  const { index } = await loadIndex(projectId);
+  const searchLimit = cutoffMs === null ? limit : Math.max(limit * 10, 100);
+  const hits = search(index, q, searchLimit);
+
+  const documents = (await Promise.all(hits.map(async (hit) => {
     const doc = await getDoc(projectId, hit.docId);
+    if (!doc || !hasMeaningfulUpdateSince(doc, cutoffMs)) return null;
     return {
       id: hit.docId,
-      title: doc?.title || '',
-      url: doc?.url || '',
-      summary: doc?.summary || '',
+      title: doc.title || '',
+      url: doc.url || '',
+      summary: doc.summary || '',
+      meaningfulUpdatedAt: doc.meaningfulUpdatedAt || null,
       score: hit.score,
     };
-  }));
+  }))).filter(Boolean).slice(0, limit);
 
   return { statusCode: 200, body: { documents } };
 }

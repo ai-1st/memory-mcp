@@ -1,5 +1,6 @@
 import { searchSimilar } from '../lib/embeddings.js';
 import { getDoc } from '../lib/db.js';
+import { hasMeaningfulUpdateSince, parseMaxDaysSinceUpdated } from '../lib/searchFilters.js';
 
 export const semanticSearch = {
   name: 'semantic_search',
@@ -14,6 +15,10 @@ export const semanticSearch = {
       limit: {
         type: 'number',
         description: 'Maximum number of documents to return (default: 5)',
+      },
+      maxDaysSinceUpdated: {
+        type: 'number',
+        description: 'Only return documents with meaningful activity within this many days',
       },
     },
     required: ['query'],
@@ -30,9 +35,21 @@ export const semanticSearch = {
   },
 
   async execute(args, config) {
-    const { query, limit = 5 } = args;
+    const { query, limit = 5, maxDaysSinceUpdated } = args;
     const { projectId } = config;
-    const chunks = await searchSimilar(projectId, query, limit * 10);
+    const { cutoffMs, error } = parseMaxDaysSinceUpdated(maxDaysSinceUpdated);
+    if (error) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ error }) }],
+        isError: true,
+      };
+    }
+
+    const searchLimit = Math.min(
+      cutoffMs === null ? limit * 10 : Math.max(limit * 50, 100),
+      100
+    );
+    const chunks = await searchSimilar(projectId, query, searchLimit);
 
     const docScores = {};
     for (const chunk of chunks) {
@@ -45,11 +62,14 @@ export const semanticSearch = {
     const docIds = Object.keys(docScores);
     const docDetails = await Promise.all(docIds.map(id => getDoc(projectId, id)));
     const documents = docIds
-      .map((id, i) => ({
+      .map((id, i) => ({ id, doc: docDetails[i] }))
+      .filter(({ doc }) => doc && hasMeaningfulUpdateSince(doc, cutoffMs))
+      .map(({ id, doc }) => ({
         id,
-        url: docDetails[i]?.url || '',
-        title: docDetails[i]?.title || '',
-        summary: docDetails[i]?.summary || '',
+        url: doc.url || '',
+        title: doc.title || '',
+        summary: doc.summary || '',
+        meaningfulUpdatedAt: doc.meaningfulUpdatedAt || null,
         score: Math.round(docScores[id].score * 1000) / 1000,
       }))
       .sort((a, b) => b.score - a.score)

@@ -36,20 +36,29 @@ export const handler = async (event) => {
       ? scrapeJira({ baseUrl: config.baseUrl, email: credentials.email, token: credentials.token, jql: config.jql })
       : scrapeConfluence({ baseUrl: config.baseUrl, email: credentials.email, token: credentials.token, parentUrl: config.parentUrl });
 
+    let docsFound = 0;
     let docsEnqueued = 0;
+    let docsSkipped = 0;
 
     for await (const doc of scraper) {
+      docsFound++;
       const contentsSha256 = crypto.createHash('sha256').update(doc.contents).digest('hex');
 
       const existing = await getLatestDocByUrl(projectId, doc.url);
       let docId;
       if (existing) {
-        if (existing.contentsSha256 === contentsSha256) {
-          docsEnqueued++;
-          continue;
-        }
         docId = existing.id;
-        await updateDoc(projectId, docId, { contents: doc.contents, contentsSha256, title: doc.title });
+        if (existing.contentsSha256 === contentsSha256) {
+          if (existing.meaningfulUpdatedAt) {
+            docsSkipped++;
+            if (docsFound % 10 === 0) {
+              await updateScrapeJob(projectId, jobId, { docsFound, docsEnqueued, docsSkipped });
+            }
+            continue;
+          }
+        } else {
+          await updateDoc(projectId, docId, { contents: doc.contents, contentsSha256, title: doc.title });
+        }
       } else {
         docId = ulid();
         await putDoc(projectId, {
@@ -65,15 +74,15 @@ export const handler = async (event) => {
 
       docsEnqueued++;
 
-      if (docsEnqueued % 10 === 0) {
-        await updateScrapeJob(projectId, jobId, { docsEnqueued });
+      if (docsFound % 10 === 0) {
+        await updateScrapeJob(projectId, jobId, { docsFound, docsEnqueued, docsSkipped });
       }
     }
 
     await updateScrapeJob(projectId, jobId, {
-      status: 'completed', docsEnqueued, docsFound: docsEnqueued,
+      status: 'completed', docsFound, docsEnqueued, docsSkipped,
     });
-    debug('scrapeJob.complete', { projectId, jobId, durationMs: Date.now() - jobStart, docsEnqueued });
+    debug('scrapeJob.complete', { projectId, jobId, durationMs: Date.now() - jobStart, docsFound, docsEnqueued, docsSkipped });
 
     if (docsEnqueued > 0) {
       await lambda.send(new InvokeCommand({

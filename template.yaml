@@ -45,6 +45,7 @@ Resources:
     Properties:
       BucketName: !Sub '${AWS::StackName}-vectors-${AWS::AccountId}'
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
 
   S3VectorsBucket:
     Type: AWS::S3Vectors::VectorBucket
@@ -129,6 +130,7 @@ Resources:
           BM25_BUCKET: !Ref VectorBucket
           SCRAPE_WORKER_FN: !Ref ScrapeWorkerFunction
           PROCESS_WORKER_FN: !Ref ProcessWorkerFunction
+          BM25_WORKER_FN: !Ref Bm25WorkerFunction
           ADMIN_SECRET_ARN: memory-mcp/admin-password
       Policies:
         - DynamoDBCrudPolicy:
@@ -158,6 +160,7 @@ Resources:
               Resource:
                 - !GetAtt ScrapeWorkerFunction.Arn
                 - !GetAtt ProcessWorkerFunction.Arn
+                - !GetAtt Bm25WorkerFunction.Arn
         - Statement:
             - Effect: Allow
               Action:
@@ -222,6 +225,7 @@ Resources:
           VECTOR_BUCKET: !Ref S3VectorsBucket
           VECTOR_INDEX: !Ref S3VectorsIndex
           BM25_BUCKET: !Ref VectorBucket
+          BM25_WORKER_FN: !Ref Bm25WorkerFunction
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MemoryMcpTable
@@ -248,6 +252,37 @@ Resources:
               Action:
                 - s3:GetObject
                 - s3:PutObject
+              Resource: !Sub '${VectorBucket.Arn}/*'
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt VectorBucket.Arn
+
+  Bm25WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: workers/bm25Worker.handler
+      CodeUri: src/
+      Timeout: 900
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MemoryMcpTable
+          BM25_BUCKET: !Ref VectorBucket
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MemoryMcpTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: '*'
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+                - s3:DeleteObject
               Resource: !Sub '${VectorBucket.Arn}/*'
             - Effect: Allow
               Action:

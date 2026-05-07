@@ -3,7 +3,7 @@ import { ulid } from 'ulid';
 import { putDoc, updateDoc, putChunk, deleteChunksByDoc, getProject, getLatestDocByUrl, listChunksByDoc } from './db.js';
 import { generateEmbedding, putVector, deleteVectorsByDoc } from './embeddings.js';
 import { generateChunks } from './ai.js';
-import { addDocument as bm25AddDocument, saveWithRetry } from './bm25.js';
+import { putBm25Job } from './queue.js';
 
 function debug(msg, extra = {}) {
   console.log(JSON.stringify({ ts: Date.now(), debug: msg, ...extra }));
@@ -52,7 +52,7 @@ export async function processDocument(projectId, { url, contents, title = '', fo
   const chunkingPrompt = project?.prompts?.chunking || '';
 
   const t0 = Date.now();
-  const { chunks } = await generateChunks(contents, url, chunkingPrompt);
+  const { chunks, meaningfulUpdatedAt = null } = await generateChunks(contents, url, chunkingPrompt);
   debug('processDocument.generateChunks', { chunksCount: chunks.length, durationMs: Date.now() - t0 });
 
   for (let i = 0; i < chunks.length; i++) {
@@ -85,11 +85,10 @@ export async function processDocument(projectId, { url, contents, title = '', fo
   await updateDoc(projectId, docId, {
     chunksCreated: chunks.length,
     summary: summaryChunk?.content || '',
+    meaningfulUpdatedAt,
   });
 
-  await saveWithRetry(projectId, (index) => {
-    bm25AddDocument(index, docId, contents);
-  });
+  await putBm25Job(projectId, { docId });
 
   debug('processDocument.done', {
     projectId, url, durationMs: Date.now() - docStart,
@@ -99,5 +98,6 @@ export async function processDocument(projectId, { url, contents, title = '', fo
   return {
     docId, url, skipped: false,
     chunksCreated: chunks.length,
+    meaningfulUpdatedAt,
   };
 }

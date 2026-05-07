@@ -245,7 +245,7 @@ export default function ScrapeQueue() {
                   <span className={`job-title${j.source === 'jira' ? ' job-title-full' : ''}`} title={j.source === 'jira' ? j.config?.jql : j.config?.parentUrl}>
                     {j.source === 'jira' ? j.config?.jql : j.config?.parentUrl?.split('/').pop()}
                   </span>
-                  <span className="job-count">{j.docsEnqueued} docs</span>
+                  <span className="job-count">{j.docsEnqueued} enqueued{j.docsSkipped ? `, ${j.docsSkipped} skipped` : ''}</span>
                   <span className="job-time">{timeAgo(j.updatedAt || j.createdAt)}</span>
                   {j.error && <span className="job-error" title={j.error}>error</span>}
                   {(j.status === 'completed' || j.status === 'failed') && (
