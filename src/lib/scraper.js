@@ -1,4 +1,4 @@
-import { htmlToText } from './html.js';
+import { htmlToText, confluenceStorageToText } from './html.js';
 
 // ── Jira ──
 
@@ -135,7 +135,7 @@ export async function* scrapeConfluence({ baseUrl, email, token, parentUrl }) {
 
   function makePage(page) {
     const bodyHtml = page.body?.storage?.value || '';
-    const text = htmlToText(bodyHtml);
+    const text = confluenceStorageToText(bodyHtml);
     if (text.length < 50) return null;
     const webui = page._links?.webui;
     const url = webui ? `${baseUrl}/wiki${webui}` : `${baseUrl}/wiki/pages/viewpage.action?pageId=${page.id}`;

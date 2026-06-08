@@ -16,7 +16,7 @@
  *   ADMIN_URL          - Admin API endpoint
  */
 
-import { htmlToText } from '../src/lib/html.js';
+import { confluenceStorageToText } from '../src/lib/html.js';
 
 const positional = [];
 const cliFlags = new Set();
@@ -139,7 +139,7 @@ let errors = 0;
 let count = 0;
 
 async function ingestPage(title, url, bodyHtml) {
-  const text = htmlToText(bodyHtml);
+  const text = confluenceStorageToText(bodyHtml);
   count++;
   console.log(`[${count}] ${title} (${text.length} chars)`);
 

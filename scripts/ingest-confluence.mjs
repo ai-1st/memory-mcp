@@ -13,7 +13,7 @@
  *   PROJECT_ID         - Project ID to ingest into (required)
  */
 
-import { htmlToText } from '../src/lib/html.js';
+import { confluenceStorageToText } from '../src/lib/html.js';
 
 const url = process.argv[2];
 if (!url) {
@@ -64,7 +64,7 @@ if (!res.ok) {
 const page = await res.json();
 const title = page.title;
 const html = page.body.storage.value;
-const text = htmlToText(html);
+const text = confluenceStorageToText(html);
 
 console.log(`Title: ${title}`);
 console.log(`Content: ${text.length} chars`);
